@@ -9,7 +9,11 @@ import java.util.Objects;
 import ai.timefold.solver.core.api.domain.entity.PlanningEntity;
 import ai.timefold.solver.core.api.domain.lookup.PlanningId;
 import ai.timefold.solver.core.api.domain.variable.PlanningVariable;
+import lombok.Getter;
+import lombok.Setter;
 
+@Setter
+@Getter
 @PlanningEntity
 public class Shift {
     @PlanningId
@@ -41,54 +45,6 @@ public class Shift {
         this.end = end;
         this.location = location;
         this.requiredSkill = requiredSkill;
-        this.employee = employee;
-    }
-
-    public String getId() {
-        return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public LocalDateTime getStart() {
-        return start;
-    }
-
-    public void setStart(LocalDateTime start) {
-        this.start = start;
-    }
-
-    public LocalDateTime getEnd() {
-        return end;
-    }
-
-    public void setEnd(LocalDateTime end) {
-        this.end = end;
-    }
-
-    public String getLocation() {
-        return location;
-    }
-
-    public void setLocation(String location) {
-        this.location = location;
-    }
-
-    public String getRequiredSkill() {
-        return requiredSkill;
-    }
-
-    public void setRequiredSkill(String requiredSkill) {
-        this.requiredSkill = requiredSkill;
-    }
-
-    public Employee getEmployee() {
-        return employee;
-    }
-
-    public void setEmployee(Employee employee) {
         this.employee = employee;
     }
 

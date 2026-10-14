@@ -9,7 +9,11 @@ import ai.timefold.solver.core.api.domain.solution.ProblemFactCollectionProperty
 import ai.timefold.solver.core.api.domain.valuerange.ValueRangeProvider;
 import ai.timefold.solver.core.api.score.buildin.hardsoftbigdecimal.HardSoftBigDecimalScore;
 import ai.timefold.solver.core.api.solver.SolverStatus;
+import lombok.Getter;
+import lombok.Setter;
 
+@Setter
+@Getter
 @PlanningSolution
 public class EmployeeSchedule {
 
@@ -38,35 +42,4 @@ public class EmployeeSchedule {
         this.solverStatus = solverStatus;
     }
 
-    public List<Employee> getEmployees() {
-        return employees;
-    }
-
-    public void setEmployees(List<Employee> employees) {
-        this.employees = employees;
-    }
-
-    public List<Shift> getShifts() {
-        return shifts;
-    }
-
-    public void setShifts(List<Shift> shifts) {
-        this.shifts = shifts;
-    }
-
-    public HardSoftBigDecimalScore getScore() {
-        return score;
-    }
-
-    public void setScore(HardSoftBigDecimalScore score) {
-        this.score = score;
-    }
-
-    public SolverStatus getSolverStatus() {
-        return solverStatus;
-    }
-
-    public void setSolverStatus(SolverStatus solverStatus) {
-        this.solverStatus = solverStatus;
-    }
 }

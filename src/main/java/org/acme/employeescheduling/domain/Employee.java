@@ -5,7 +5,11 @@ import java.util.Objects;
 import java.util.Set;
 
 import ai.timefold.solver.core.api.domain.lookup.PlanningId;
+import lombok.Getter;
+import lombok.Setter;
 
+@Setter
+@Getter
 public class Employee {
     @PlanningId
     private String name;
@@ -25,46 +29,6 @@ public class Employee {
         this.skills = skills;
         this.unavailableDates = unavailableDates;
         this.undesiredDates = undesiredDates;
-        this.desiredDates = desiredDates;
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public Set<String> getSkills() {
-        return skills;
-    }
-
-    public void setSkills(Set<String> skills) {
-        this.skills = skills;
-    }
-
-    public Set<LocalDate> getUnavailableDates() {
-        return unavailableDates;
-    }
-
-    public void setUnavailableDates(Set<LocalDate> unavailableDates) {
-        this.unavailableDates = unavailableDates;
-    }
-
-    public Set<LocalDate> getUndesiredDates() {
-        return undesiredDates;
-    }
-
-    public void setUndesiredDates(Set<LocalDate> undesiredDates) {
-        this.undesiredDates = undesiredDates;
-    }
-
-    public Set<LocalDate> getDesiredDates() {
-        return desiredDates;
-    }
-
-    public void setDesiredDates(Set<LocalDate> desiredDates) {
         this.desiredDates = desiredDates;
     }
 
