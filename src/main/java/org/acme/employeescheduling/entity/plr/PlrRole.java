@@ -1,4 +1,4 @@
-package org.acme.employeescheduling.entity;
+package org.acme.employeescheduling.entity.plr;
 
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.Column;
@@ -7,8 +7,6 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
-
-import java.util.UUID;
 
 /**
  * Role table
@@ -20,9 +18,6 @@ import java.util.UUID;
 public class PlrRole extends PanacheEntityBase {
 
     @Id
-    @Column(name = "F_GUID", nullable = false)
-    public UUID id;
-
     @Column(name = "RLID")
     public Integer roleId;
 

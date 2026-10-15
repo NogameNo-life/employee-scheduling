@@ -46,7 +46,6 @@ public class CrewScheduleResource {
     private final CrewRotationGenerator rotationGenerator;
     private final CrewScheduleFactory scheduleFactory;
 
-    // TODO: save results to the database instead of memory
     private final ConcurrentMap<String, Job> jobIdToJob = new ConcurrentHashMap<>();
 
     @Inject

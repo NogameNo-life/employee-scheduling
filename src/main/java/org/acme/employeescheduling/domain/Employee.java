@@ -11,7 +11,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * Employee (BD_CRD.TABN). Problem fact and the value the solver assigns to a
+ * Employee (BD_CARD.TABN). Problem fact and the value the solver assigns to a
  * {@link Position}.
  */
 @Getter

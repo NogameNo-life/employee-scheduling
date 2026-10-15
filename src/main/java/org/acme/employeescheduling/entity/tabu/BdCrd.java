@@ -1,4 +1,4 @@
-package org.acme.employeescheduling.entity;
+package org.acme.employeescheduling.entity.tabu;
 
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.Entity;
@@ -6,20 +6,14 @@ import lombok.Getter;
 import lombok.Setter;
 import jakarta.persistence.*;
 
-import java.util.UUID;
-
 /**
- * Employee table
+ * Employee table (BD_CARD in the tabu2 database, "tabu" persistence unit)
  */
 @Entity
 @Getter
 @Setter
-@Table(name = "BD_CRD", schema = "dbo")
+@Table(name = "BD_CARD", schema = "dbo")
 public class BdCrd extends PanacheEntityBase {
-
-    @Id
-    @Column(name = "F_GUID", nullable = false)
-    public UUID id;
 
     @Column(name = "BRID")
     public Integer crewId;
@@ -27,6 +21,7 @@ public class BdCrd extends PanacheEntityBase {
     @Column(name = "FIO")
     public String fullName;
 
+    @Id
     @Column(name = "TABN")
     public Integer employeeId;
 

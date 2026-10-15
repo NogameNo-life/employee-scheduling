@@ -1,4 +1,4 @@
-package org.acme.employeescheduling.entity;
+package org.acme.employeescheduling.entity.plr;
 
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.Column;
@@ -7,8 +7,6 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.Setter;
-
-import java.util.UUID;
 
 /**
  * Crew table
@@ -19,11 +17,8 @@ import java.util.UUID;
 @Table(name = "PLR_BR", schema = "dbo")
 public class PlrBr extends PanacheEntityBase {
 
+    /** Crew number, referenced by BD_CARD.BRID and PLR_RLBR.BRID. */
     @Id
-    @Column(name = "F_GUID", nullable = false)
-    public UUID id;
-
-    /** Crew number, referenced by BD_CRD.BRID and PLR_RLBR.BRID. */
     @Column(name = "BRID")
     public Integer crewId;
 
