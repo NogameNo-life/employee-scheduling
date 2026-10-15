@@ -14,11 +14,12 @@ import java.util.List;
  *   "to": "2026-11-30",
  *   "anchorDate": "2026-01-01",
  *   "lines": [
- *     { "lineId": "L1", "lineName": "Line 1", "crewIds": [1, 3, 4, 2] },
- *     { "lineId": "L2", "lineName": "Line 2", "crewIds": [5, 7, 8, 6] }
+ *     { "lineId": "L1", "crewIds": [1, 3, 4, 2] },
+ *     { "lineId": "L2", "crewIds": [5, 7, 8, 6] }
  *   ]
  * }
  * </pre>
+ * {@code lineId}: line code from PLR_PLINES.KRC; the line name is taken from the DB.
  * {@code crewIds}: 4 crews per line, in the order they start their day shift from {@code anchorDate}.
  * Later this can come from a database table instead of the request.
  */
@@ -29,6 +30,6 @@ public record SolveRequest(
         LocalDate anchorDate,
         List<LineRotation> lines) {
 
-    public record LineRotation(String lineId, String lineName, List<Integer> crewIds) {
+    public record LineRotation(String lineId, List<Integer> crewIds) {
     }
 }

@@ -30,7 +30,7 @@ import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.rest.exception.EmployeeScheduleSolverException;
 import org.acme.employeescheduling.service.CrewData;
-import org.acme.employeescheduling.service.CrewDataLoader;
+import org.acme.employeescheduling.service.CrewDataCache;
 import org.acme.employeescheduling.service.CrewRotationGenerator;
 import org.acme.employeescheduling.service.CrewScheduleFactory;
 import org.slf4j.Logger;
@@ -42,17 +42,17 @@ public class CrewScheduleResource {
     private static final Logger LOGGER = LoggerFactory.getLogger(CrewScheduleResource.class);
 
     private final SolverManager<CrewSchedule, String> solverManager;
-    private final CrewDataLoader loader;
+    private final CrewDataCache crewDataCache;
     private final CrewRotationGenerator rotationGenerator;
     private final CrewScheduleFactory scheduleFactory;
 
     private final ConcurrentMap<String, Job> jobIdToJob = new ConcurrentHashMap<>();
 
     @Inject
-    public CrewScheduleResource(SolverManager<CrewSchedule, String> solverManager, CrewDataLoader loader,
+    public CrewScheduleResource(SolverManager<CrewSchedule, String> solverManager, CrewDataCache crewDataCache,
             CrewRotationGenerator rotationGenerator, CrewScheduleFactory scheduleFactory) {
         this.solverManager = solverManager;
-        this.loader = loader;
+        this.crewDataCache = crewDataCache;
         this.rotationGenerator = rotationGenerator;
         this.scheduleFactory = scheduleFactory;
     }
@@ -63,14 +63,14 @@ public class CrewScheduleResource {
         return jobIdToJob.keySet();
     }
 
-    /** Loads data from the DB, generates the crew schedule and starts solving. Returns the job ID. */
+    /** Takes crew data and lines from the cache, generates the crew schedule and starts solving. Returns the job ID. */
     @POST
     @Path("solve")
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.TEXT_PLAIN)
     public String solve(SolveRequest request) {
         validate(request);
-        CrewData data = loader.load(request.department());
+        CrewData data = crewDataCache.get(request.department());
         Map<Integer, Crew> crewsById = data.crews().stream()
                 .collect(Collectors.toMap(Crew::getId, Function.identity()));
 
@@ -83,7 +83,9 @@ public class CrewScheduleResource {
                 }
                 return crew;
             }).toList();
-            crewsByLine.put(new Line(lr.lineId(), lr.lineName()), crews);
+            Line line = crewDataCache.getLine(lr.lineId())
+                    .orElseThrow(() -> new BadRequestException("Unknown line " + lr.lineId() + " (PLR_PLINES.KRC)."));
+            crewsByLine.put(line, crews);
         }
 
         List<CrewShift> crewShifts = rotationGenerator.generate(
