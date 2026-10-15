@@ -1,55 +1,57 @@
 package org.acme.employeescheduling.domain;
 
 import java.time.LocalDate;
-import java.util.Objects;
+import java.util.HashSet;
 import java.util.Set;
 
 import ai.timefold.solver.core.api.domain.lookup.PlanningId;
+import lombok.EqualsAndHashCode;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-@Setter
+/**
+ * Employee (BD_CRD.TABN). Problem fact and the value the solver assigns to a
+ * {@link Position}.
+ */
 @Getter
+@Setter
+@NoArgsConstructor
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Employee {
+
     @PlanningId
-    private String name;
-    private Set<String> skills;
+    @EqualsAndHashCode.Include
+    private Integer id;
 
-    private Set<LocalDate> unavailableDates;
-    private Set<LocalDate> undesiredDates;
-    private Set<LocalDate> desiredDates;
+    private String fullName;
 
-    public Employee() {
+    /** The crew this employee belongs to. */
+    private Crew crew;
 
+    /** Roles this employee can perform (PLR_RLTB). */
+    private Set<Role> roles = new HashSet<>();
+
+    /** Vacation, sick leave, etc. Empty until an absence table exists. */
+    private Set<LocalDate> unavailableDates = new HashSet<>();
+
+    public Employee(Integer id, String fullName, Crew crew, Set<Role> roles) {
+        this.id = id;
+        this.fullName = fullName;
+        this.crew = crew;
+        this.roles = roles;
     }
 
-    public Employee(String name, Set<String> skills,
-        Set<LocalDate> unavailableDates, Set<LocalDate> undesiredDates, Set<LocalDate> desiredDates) {
-        this.name = name;
-        this.skills = skills;
-        this.unavailableDates = unavailableDates;
-        this.undesiredDates = undesiredDates;
-        this.desiredDates = desiredDates;
+    public boolean canPerform(Role role) {
+        return roles.contains(role);
+    }
+
+    public boolean isUnavailableOn(LocalDate date) {
+        return unavailableDates.contains(date);
     }
 
     @Override
     public String toString() {
-        return name;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof Employee employee)) {
-            return false;
-        }
-        return Objects.equals(getName(), employee.getName());
-    }
-
-    @Override
-    public int hashCode() {
-        return getName().hashCode();
+        return fullName + " (" + id + ")";
     }
 }

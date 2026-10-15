@@ -7,39 +7,37 @@ import ai.timefold.solver.core.api.domain.solution.PlanningScore;
 import ai.timefold.solver.core.api.domain.solution.PlanningSolution;
 import ai.timefold.solver.core.api.domain.solution.ProblemFactCollectionProperty;
 import ai.timefold.solver.core.api.domain.valuerange.ValueRangeProvider;
-import ai.timefold.solver.core.api.score.buildin.hardsoftbigdecimal.HardSoftBigDecimalScore;
+import ai.timefold.solver.core.api.score.buildin.hardmediumsoft.HardMediumSoftScore;
 import ai.timefold.solver.core.api.solver.SolverStatus;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-@Setter
-@Getter
 @PlanningSolution
-public class EmployeeSchedule {
+@Getter
+@Setter
+@NoArgsConstructor
+public class CrewSchedule {
 
     @ProblemFactCollectionProperty
     @ValueRangeProvider
     private List<Employee> employees;
 
-    @PlanningEntityCollectionProperty
-    private List<Shift> shifts;
+    @ProblemFactCollectionProperty
+    private List<CrewShift> crewShifts;
 
+    @PlanningEntityCollectionProperty
+    private List<Position> positions;
+
+    /** hard = rules, medium = unfilled seats, soft = fairness. */
     @PlanningScore
-    private HardSoftBigDecimalScore score;
+    private HardMediumSoftScore score;
 
     private SolverStatus solverStatus;
 
-    // No-arg constructor required for Timefold
-    public EmployeeSchedule() {}
-
-    public EmployeeSchedule(List<Employee> employees, List<Shift> shifts) {
+    public CrewSchedule(List<Employee> employees, List<CrewShift> crewShifts, List<Position> positions) {
         this.employees = employees;
-        this.shifts = shifts;
+        this.crewShifts = crewShifts;
+        this.positions = positions;
     }
-
-    public EmployeeSchedule(HardSoftBigDecimalScore score, SolverStatus solverStatus) {
-        this.score = score;
-        this.solverStatus = solverStatus;
-    }
-
 }

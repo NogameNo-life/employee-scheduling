@@ -9,25 +9,26 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.util.UUID;
+
 /**
- * Role table
+ * A table for linking roles to a team
  */
 @Entity
 @Getter
 @Setter
-@Table(name = "PLR_ROLE", schema = "dbo")
-public class PLR_ROLE extends PanacheEntityBase {
+@Table(name = "PLR_RLBR", schema = "dbo")
+public class PlrRlbr extends PanacheEntityBase {
 
     @Id
     @Column(name = "F_GUID", nullable = false)
     public UUID id;
 
+    @Column(name = "BRID")
+    public Integer crewId;
+
+    @Column(name = "NPERS")
+    public Integer numberOfStaff;
+
     @Column(name = "RLID")
     public Integer roleId;
-
-    @Column(name = "NAME")
-    public String roleName;
-
-    @Column(name = "OBJ")
-    public String department;
 }

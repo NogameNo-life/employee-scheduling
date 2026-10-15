@@ -17,7 +17,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @Table(name = "PLR_RLTB", schema = "dbo")
-public class PLR_RLTB extends PanacheEntityBase {
+public class PlrRltb extends PanacheEntityBase {
 
     @Id
     @Column(name = "F_GUID", nullable = false)
