@@ -176,6 +176,10 @@
                 <groupId>io.quarkus</groupId>
                 <artifactId>quarkus-maven-plugin</artifactId>
                 <version>${version.io.quarkus}</version>
+                <configuration>
+                    <!-- quarkus:dev only. TABU2 SQL Server needs TLS 1.0, see src/main/jvm/legacy-tls.security -->
+                    <jvmArgs>-Djava.security.properties=${project.basedir}/src/main/jvm/legacy-tls.security</jvmArgs>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>
