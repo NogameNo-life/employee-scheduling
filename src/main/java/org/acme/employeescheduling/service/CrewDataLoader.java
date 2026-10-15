@@ -18,10 +18,8 @@ import org.acme.employeescheduling.entity.plr.PlrBr;
 import org.acme.employeescheduling.entity.plr.PlrRlbr;
 import org.acme.employeescheduling.entity.plr.PlrRltb;
 import org.acme.employeescheduling.entity.plr.PlrRole;
-import org.acme.employeescheduling.entity.tabu.BdCrd;
 import org.acme.employeescheduling.repository.CrewCompositionRepository;
 import org.acme.employeescheduling.repository.CrewRepository;
-import org.acme.employeescheduling.repository.EmployeeRepository;
 import org.acme.employeescheduling.repository.EmployeeRoleRepository;
 import org.acme.employeescheduling.repository.RoleRepository;
 
@@ -29,12 +27,12 @@ import org.acme.employeescheduling.repository.RoleRepository;
  * Loads crews, roles, employees and crew composition for one department.
  *
  * <p>
- * Exactly 5 queries, no matter how many employees there are (no N+1):
+ * Exactly 4 queries, no matter how many employees there are (no N+1):
  * every table is read once and joined in memory with maps.
  * Subqueries are used instead of "IN (:ids)" because SQL Server allows
  * at most 2100 parameters per query.
- * Employees (BD_CARD) are in another database (tabu2), so they are joined
- * with the other tables in memory only.
+ * Only MES2 is read for now: employees are the personnel numbers (TABN) in PLR_RLTB,
+ * without name and crew. BD_CARD (tabu2) is not read yet.
  */
 @ApplicationScoped
 public class CrewDataLoader {
@@ -42,16 +40,14 @@ public class CrewDataLoader {
         private final CrewRepository crewRepository;
         private final RoleRepository roleRepository;
         private final EmployeeRoleRepository employeeRoleRepository;
-        private final EmployeeRepository employeeRepository;
         private final CrewCompositionRepository crewCompositionRepository;
 
         public CrewDataLoader(CrewRepository crewRepository, RoleRepository roleRepository,
-                        EmployeeRoleRepository employeeRoleRepository, EmployeeRepository employeeRepository,
+                        EmployeeRoleRepository employeeRoleRepository,
                         CrewCompositionRepository crewCompositionRepository) {
                 this.crewRepository = crewRepository;
                 this.roleRepository = roleRepository;
                 this.employeeRoleRepository = employeeRoleRepository;
-                this.employeeRepository = employeeRepository;
                 this.crewCompositionRepository = crewCompositionRepository;
         }
 
@@ -78,15 +74,14 @@ public class CrewDataLoader {
                         }
                 }
 
-                // 4) Employees (only those who belong to a known crew)
-                List<BdCrd> employeeRows = employeeRepository.findByDepartment(department);
-                List<Employee> employees = employeeRows.stream()
-                                .filter(r -> r.employeeId != null && crewsById.containsKey(r.crewId))
-                                .map(r -> new Employee(r.employeeId, r.fullName, crewsById.get(r.crewId),
-                                                rolesByEmployeeId.getOrDefault(r.employeeId, new HashSet<>())))
+                // Employees: everyone with a role in this department. No query of its own.
+                // Name and crew are unknown until the crew link (PLR_BR) is mapped.
+                List<Employee> employees = rolesByEmployeeId.entrySet().stream()
+                                .filter(e -> e.getKey() != null)
+                                .map(e -> new Employee(e.getKey(), String.valueOf(e.getKey()), null, e.getValue()))
                                 .toList();
 
-                // 5) Crew composition: crew -> role -> number of people per shift
+                // 4) Crew composition: crew -> role -> number of people per shift
                 List<PlrRlbr> compositionRows = crewCompositionRepository.findByDepartment(department);
                 Map<Integer, Map<Role, Integer>> composition = new HashMap<>();
                 compositionRows.stream()

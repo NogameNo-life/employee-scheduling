@@ -61,6 +61,15 @@ class CrewScheduleConstraintProviderTest {
     }
 
     @Test
+    void wrongCrew_employeeWithoutCrewIsNotPenalized() {
+        Employee bob = employee(2, null, OPERATOR);
+        verifier.verifyThat(CrewScheduleConstraintProvider::wrongCrew)
+                .given(position(MONDAY, ShiftType.DAY, CREW_1, OPERATOR, bob),
+                        position(MONDAY.plusDays(1), ShiftType.DAY, CREW_2, OPERATOR, bob))
+                .penalizesBy(0);
+    }
+
+    @Test
     void unavailableEmployee() {
         Employee ann = employee(1, CREW_1, OPERATOR);
         ann.getUnavailableDates().add(MONDAY);

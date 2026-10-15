@@ -47,9 +47,10 @@ public class CrewScheduleConstraintProvider implements ConstraintProvider {
                 .asConstraint("Employee lacks the required role");
     }
 
+    /** Employees without a crew (crew link not loaded yet) may work in any crew. */
     Constraint wrongCrew(ConstraintFactory factory) {
         return factory.forEach(Position.class)
-                .filter(p -> !p.getCrew().equals(p.getEmployee().getCrew()))
+                .filter(p -> p.getEmployee().getCrew() != null && !p.getCrew().equals(p.getEmployee().getCrew()))
                 .penalize(HardMediumSoftScore.ONE_HARD)
                 .asConstraint("Employee from another crew");
     }
