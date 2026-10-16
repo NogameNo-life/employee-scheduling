@@ -26,6 +26,9 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import ai.timefold.solver.core.api.score.analysis.ScoreAnalysis;
+import ai.timefold.solver.core.api.score.buildin.hardmediumsoft.HardMediumSoftScore;
+import ai.timefold.solver.core.api.solver.SolutionManager;
 import ai.timefold.solver.core.api.solver.SolverManager;
 
 import org.acme.employeescheduling.domain.Crew;
@@ -48,6 +51,7 @@ public class CrewScheduleResource {
     private static final Logger LOGGER = LoggerFactory.getLogger(CrewScheduleResource.class);
 
     private final SolverManager<CrewSchedule, String> solverManager;
+    private final SolutionManager<CrewSchedule, HardMediumSoftScore> solutionManager;
     private final CrewDataCache crewDataCache;
     private final CrewRotationGenerator rotationGenerator;
     private final CrewScheduleFactory scheduleFactory;
@@ -56,10 +60,12 @@ public class CrewScheduleResource {
     private final ConcurrentMap<String, Job> jobIdToJob = new ConcurrentHashMap<>();
 
     @Inject
-    public CrewScheduleResource(SolverManager<CrewSchedule, String> solverManager, CrewDataCache crewDataCache,
+    public CrewScheduleResource(SolverManager<CrewSchedule, String> solverManager,
+            SolutionManager<CrewSchedule, HardMediumSoftScore> solutionManager, CrewDataCache crewDataCache,
             CrewRotationGenerator rotationGenerator, CrewScheduleFactory scheduleFactory,
             CrewRosterService rosterService) {
         this.solverManager = solverManager;
+        this.solutionManager = solutionManager;
         this.crewDataCache = crewDataCache;
         this.rotationGenerator = rotationGenerator;
         this.scheduleFactory = scheduleFactory;
@@ -82,9 +88,24 @@ public class CrewScheduleResource {
         CrewData data = crewDataCache.get(request.department());
         List<CrewShift> crewShifts = generateRotation(() -> rotationGenerator.generate(
                 request.from(), request.to(), request.anchorDate(), crewsByLine(request, data)));
-        CrewSchedule problem = scheduleFactory.create(data, crewShifts);
+        return startSolving(scheduleFactory.create(data, crewShifts));
+    }
+
+    /** Assigns employees to the crew schedule generated at startup or by the last {@code init}. Returns the job ID. */
+    @POST
+    @Path("rotation/solve")
+    @Produces(MediaType.TEXT_PLAIN)
+    public String solveRotation() {
+        Roster roster = rosterService.getRoster();
+        if (roster.crewShifts().isEmpty()) {
+            throw new BadRequestException("There is no crew schedule to solve. Generate it first.");
+        }
+        return startSolving(scheduleFactory.create(crewDataCache.getAll(), roster.crewShifts()));
+    }
+
+    private String startSolving(CrewSchedule problem) {
         LOGGER.info("Solving {} positions, {} employees, {} crew shifts.",
-                problem.getPositions().size(), problem.getEmployees().size(), crewShifts.size());
+                problem.getPositions().size(), problem.getEmployees().size(), problem.getCrewShifts().size());
 
         String jobId = UUID.randomUUID().toString();
         jobIdToJob.put(jobId, Job.ofSchedule(problem));
@@ -130,6 +151,14 @@ public class CrewScheduleResource {
         CrewSchedule schedule = getOrThrow(jobId);
         schedule.setSolverStatus(solverManager.getSolverStatus(jobId));
         return schedule;
+    }
+
+    /** Which constraints are broken in the current solution of the job, and by which positions. */
+    @GET
+    @Path("{jobId}/analyze")
+    @Produces(MediaType.APPLICATION_JSON)
+    public ScoreAnalysis<HardMediumSoftScore> analyze(@PathParam("jobId") String jobId) {
+        return solutionManager.analyze(getOrThrow(jobId));
     }
 
     @DELETE

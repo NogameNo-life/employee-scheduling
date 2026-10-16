@@ -1,7 +1,9 @@
 package org.acme.employeescheduling.service;
 
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -10,6 +12,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.entity.plr.PlrLines;
 import org.acme.employeescheduling.repository.CrewRepository;
 import org.acme.employeescheduling.repository.LineRepository;
@@ -60,6 +63,18 @@ public class CrewDataCache {
     /** Data for one department. A department that was not loaded at startup is loaded now. */
     public CrewData get(String department) {
         return dataByDepartment.computeIfAbsent(department.trim(), loader::load);
+    }
+
+    /** Data of all loaded departments together: crews of different departments can share the schedule. */
+    public CrewData getAll() {
+        List<CrewData> all = List.copyOf(dataByDepartment.values());
+        Map<Integer, Map<Role, Integer>> composition = new HashMap<>();
+        all.forEach(data -> composition.putAll(data.composition()));
+        return new CrewData(
+                all.stream().flatMap(data -> data.crews().stream()).distinct().toList(),
+                all.stream().flatMap(data -> data.roles().stream()).distinct().toList(),
+                all.stream().flatMap(data -> data.employees().stream()).distinct().toList(),
+                composition);
     }
 
     public Optional<Line> getLine(String lineId) {

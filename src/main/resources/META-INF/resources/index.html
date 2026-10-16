@@ -1,35 +1,112 @@
-<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Crew schedule</title>
-    <link rel="stylesheet" href="/webjars/bootstrap/css/bootstrap.min.css"/>
-    <style>
-        .schedule { font-size: .85rem; }
-        .schedule th, .schedule td { text-align: center; white-space: nowrap; padding: .25rem .4rem; }
-        .schedule th.shift { text-align: left; }
-        .schedule .weekend { background: #f1f3f5; }
-        .crew { display: block; border-radius: .25rem; padding: .1rem .3rem; color: #fff; font-weight: 600; }
-    </style>
+  <meta content="text/html; charset=UTF-8" http-equiv="Content-Type">
+  <meta content="width=device-width, initial-scale=1" name="viewport">
+  <title>Employee scheduling - Timefold Solver on Quarkus</title>
+
+  <link rel="stylesheet" href="/webjars/bootstrap/css/bootstrap.min.css"/>
+  <link rel="stylesheet" href="/webjars/font-awesome/css/all.css"/>
+  <link rel="stylesheet" href="/webjars/timefold/css/timefold-webui.css" />
+  <style>
+    .schedule th, .schedule td {
+      text-align: center;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    .schedule th:first-child, .schedule td:first-child {
+      text-align: left;
+      position: sticky;
+      left: 0;
+      background: #fff;
+    }
+    .schedule .weekend {
+      background: #D3D7CFFF;
+    }
+    .crew {
+      display: inline-block;
+      border-radius: .25rem;
+      padding: 0 .3rem;
+    }
+  </style>
+  <link rel="icon" href="/webjars/timefold/img/timefold-favicon.svg" type="image/svg+xml">
 </head>
+
 <body>
-<div class="container-fluid py-3">
-    <div class="d-flex flex-wrap align-items-end gap-2 mb-3">
-        <h1 class="h4 me-auto mb-0">Crew schedule <small id="month" class="text-muted"></small></h1>
-        <label class="form-label mb-0">
-            Month
-            <input id="dateInput" type="month" class="form-control form-control-sm">
-        </label>
-        <button id="initButton" class="btn btn-primary btn-sm">Generate</button>
+<header id="timefold-auto-header"></header>
+<div class="container-fluid">
+  <div class="sticky-top d-flex justify-content-center align-items-center" aria-live="polite" aria-atomic="true">
+    <div id="notificationPanel" style="position: absolute; top: .5rem;"></div>
+  </div>
+  <h1>Employee scheduling solver</h1>
+  <p>
+    Crew schedule by line: every day the first crew works the day shift (08:00-20:00) and the second crew works
+    the night shift (20:00-08:00). Every crew works Day - Night - Sleep day - Day off.
+  </p>
+
+  <div class="mb-2">
+    <input id="monthInput" type="month" class="form-control d-inline-block w-auto align-middle">
+    <button id="generateButton" type="button" class="btn btn-secondary">
+      <span class="fas fa-calendar-alt"></span> Generate
+    </button>
+    <button id="refreshButton" type="button" class="btn btn-secondary">
+      <span class="fas fa-refresh"></span> Refresh
+    </button>
+    <button id="solveButton" type="button" class="btn btn-success">
+      <span class="fas fa-play"></span> Solve
+    </button>
+    <button id="stopSolvingButton" type="button" class="btn btn-danger">
+      <span class="fas fa-stop"></span> Stop solving
+    </button>
+    <span id="unassignedPositions" class="ms-2 align-middle fw-bold"></span>
+    <span id="score" class="score ms-2 align-middle fw-bold">Score: ?</span>
+    <button id="analyzeButton" type="button" class="ms-2 btn btn-secondary">
+      <span class="fas fa-question"></span>
+    </button>
+
+    <div class="float-end">
+      <ul class="nav nav-pills" role="tablist">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link active" id="byLineTab" data-bs-toggle="tab" data-bs-target="#byLinePanel" type="button" role="tab" aria-controls="byLinePanel" aria-selected="true">By line</button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link" id="byEmployeeTab" data-bs-toggle="tab" data-bs-target="#byEmployeePanel" type="button" role="tab" aria-controls="byEmployeePanel" aria-selected="false">By employee</button>
+        </li>
+      </ul>
     </div>
-    <p class="text-muted small">
-        Every crew works Day (08:00–20:00) → Night (20:00–08:00) → two days off.
-        Crews are assigned to lines at random on every "Generate".
-    </p>
-    <div id="error" class="alert alert-danger d-none"></div>
-    <div id="lines"></div>
+  </div>
+  <div class="mb-4 tab-content">
+    <div class="tab-pane fade show active" id="byLinePanel" role="tabpanel" aria-labelledby="byLineTab">
+      <div id="lineVisualization" class="table-responsive"></div>
+    </div>
+    <div class="tab-pane fade" id="byEmployeePanel" role="tabpanel" aria-labelledby="byEmployeeTab">
+      <div id="employeeVisualization" class="table-responsive"></div>
+    </div>
+  </div>
 </div>
-<script src="app.js"></script>
+<footer id="timefold-auto-footer"></footer>
+<div class="modal fadebd-example-modal-lg" id="scoreAnalysisModal" tabindex="-1"
+     aria-labelledby="scoreAnalysisModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h1 class="modal-title fs-5" id="scoreAnalysisModalLabel">Score analysis <span
+                id="scoreAnalysisScoreLabel"></span></h1>
+
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="scoreAnalysisModalContent">
+        <!-- Filled in by app.js -->
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/webjars/jquery/jquery.min.js"></script>
+<script src="/webjars/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/webjars/timefold/js/timefold-webui.js"></script>
+<script src="/app.js"></script>
 </body>
 </html>

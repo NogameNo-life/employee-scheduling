@@ -42,7 +42,7 @@ public class CrewRosterService {
     private final CrewRotationGenerator rotationGenerator;
     private final Random random = new Random();
 
-    private volatile Roster roster = new Roster(YearMonth.now(), Map.of(), List.of());
+    private volatile Roster roster = new Roster(YearMonth.now(), Map.of(), List.of(), List.of());
 
     public CrewRosterService(CrewDataCache crewDataCache, CrewRotationGenerator rotationGenerator) {
         this.crewDataCache = crewDataCache;
@@ -76,7 +76,7 @@ public class CrewRosterService {
         // The rotation starts on the first day of the month, because the crews are new every time.
         List<CrewShift> crewShifts = rotationGenerator.generate(month.atDay(1), month.atEndOfMonth(),
                 month.atDay(1), crewsByLine);
-        roster = new Roster(month, crewsByLine, rotationGenerator.toLineSchedules(crewShifts));
+        roster = new Roster(month, crewsByLine, crewShifts, rotationGenerator.toLineSchedules(crewShifts));
         LOGGER.info("Crew schedule for {}: {} lines, {} crew shifts.", month, crewsByLine.size(), crewShifts.size());
         return roster;
     }
@@ -112,8 +112,10 @@ public class CrewRosterService {
 
     /**
      * @param crewsByLine 4 crews per line, in rotation order
+     * @param crewShifts the same schedule as problem facts for the solver
      * @param lines the schedule for the frontend
      */
-    public record Roster(YearMonth month, @JsonIgnore Map<Line, List<Crew>> crewsByLine, List<LineSchedule> lines) {
+    public record Roster(YearMonth month, @JsonIgnore Map<Line, List<Crew>> crewsByLine,
+            @JsonIgnore List<CrewShift> crewShifts, List<LineSchedule> lines) {
     }
 }
