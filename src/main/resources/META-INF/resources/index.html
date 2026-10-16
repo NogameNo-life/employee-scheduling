@@ -4,28 +4,16 @@
   <meta content="width=device-width, initial-scale=1" name="viewport">
   <title>Employee scheduling - Timefold Solver on Quarkus</title>
 
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.2/styles/vis-timeline-graph2d.min.css"
+        integrity="sha256-svzNasPg1yR5gvEaRei2jg+n4Pc3sVyMUWeS6xRAh6U=" crossorigin="anonymous">
+
   <link rel="stylesheet" href="/webjars/bootstrap/css/bootstrap.min.css"/>
   <link rel="stylesheet" href="/webjars/font-awesome/css/all.css"/>
   <link rel="stylesheet" href="/webjars/timefold/css/timefold-webui.css" />
   <style>
-    .schedule th, .schedule td {
-      text-align: center;
-      white-space: nowrap;
-      vertical-align: middle;
-    }
-    .schedule th:first-child, .schedule td:first-child {
-      text-align: left;
-      position: sticky;
-      left: 0;
-      background: #fff;
-    }
-    .schedule .weekend {
+    .vis-time-axis .vis-grid.vis-saturday,
+    .vis-time-axis .vis-grid.vis-sunday {
       background: #D3D7CFFF;
-    }
-    .crew {
-      display: inline-block;
-      border-radius: .25rem;
-      padding: 0 .3rem;
     }
   </style>
   <link rel="icon" href="/webjars/timefold/img/timefold-favicon.svg" type="image/svg+xml">
@@ -76,10 +64,10 @@
   </div>
   <div class="mb-4 tab-content">
     <div class="tab-pane fade show active" id="byLinePanel" role="tabpanel" aria-labelledby="byLineTab">
-      <div id="lineVisualization" class="table-responsive"></div>
+      <div id="lineVisualization"></div>
     </div>
     <div class="tab-pane fade" id="byEmployeePanel" role="tabpanel" aria-labelledby="byEmployeeTab">
-      <div id="employeeVisualization" class="table-responsive"></div>
+      <div id="employeeVisualization"></div>
     </div>
   </div>
 </div>
@@ -106,6 +94,9 @@
 
 <script src="/webjars/jquery/jquery.min.js"></script>
 <script src="/webjars/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/webjars/js-joda/dist/js-joda.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.2/standalone/umd/vis-timeline-graph2d.min.js"
+        integrity="sha256-Jy2+UO7rZ2Dgik50z3XrrNpnc5+2PAx9MhL2CicodME=" crossorigin="anonymous"></script>
 <script src="/webjars/timefold/js/timefold-webui.js"></script>
 <script src="/app.js"></script>
 </body>

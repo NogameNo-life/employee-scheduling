@@ -1,9 +1,35 @@
 var autoRefreshIntervalId = null;
 let jobId = null;
-let loadedRoster = null;
 let loadedSchedule = null;
 
-const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const DAY_SHIFT_START = JSJoda.LocalTime.of(8, 0);
+const NIGHT_SHIFT_START = JSJoda.LocalTime.of(20, 0);
+const timeFormat = JSJoda.DateTimeFormatter.ofPattern("HH:mm");
+
+const byLinePanel = document.getElementById("lineVisualization");
+const byLineTimelineOptions = {
+  timeAxis: {scale: "day"},
+  orientation: {axis: "top"},
+  stack: false,
+  xss: {disabled: true}, // Items are XSS safe through JQuery
+  zoomMin: 1000 * 60 * 60 * 24 // One day in milliseconds
+};
+var byLineGroupDataSet = new vis.DataSet();
+var byLineItemDataSet = new vis.DataSet();
+var byLineTimeline = new vis.Timeline(byLinePanel, byLineItemDataSet, byLineGroupDataSet, byLineTimelineOptions);
+
+const byEmployeePanel = document.getElementById("employeeVisualization");
+const byEmployeeTimelineOptions = {
+  timeAxis: {scale: "day"},
+  orientation: {axis: "top"},
+  stack: false,
+  xss: {disabled: true}, // Items are XSS safe through JQuery
+  zoomMin: 1000 * 60 * 60 * 24 // One day in milliseconds
+};
+var byEmployeeGroupDataSet = new vis.DataSet();
+var byEmployeeItemDataSet = new vis.DataSet();
+var byEmployeeTimeline = new vis.Timeline(byEmployeePanel, byEmployeeItemDataSet, byEmployeeGroupDataSet,
+  byEmployeeTimelineOptions);
 
 $(document).ready(function () {
   replaceTimefoldAutoHeaderFooter();
@@ -23,6 +49,13 @@ $(document).ready(function () {
   $("#analyzeButton").click(function () {
     analyze();
   });
+  // HACK to allow vis-timeline to work within Bootstrap tabs
+  $("#byLineTab").on('shown.bs.tab', function (event) {
+    byLineTimeline.redraw();
+  })
+  $("#byEmployeeTab").on('shown.bs.tab', function (event) {
+    byEmployeeTimeline.redraw();
+  })
 
   setupAjax();
   refreshSolvingButtons(false);
@@ -91,114 +124,89 @@ function generate() {
     loadedSchedule = null;
     $("#score").text("Score: ?");
     $("#unassignedPositions").text("");
-    $("#employeeVisualization").children().remove();
+    byEmployeeGroupDataSet.clear();
+    byEmployeeItemDataSet.clear();
     renderRoster(roster);
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Generating the crew schedule failed.", xhr);
   });
 }
 
-function scheduleDays(roster) {
-  return roster.lines.length === 0 ? [] : roster.lines[0].days.map(day => day.date);
-}
-
-function dayHeader(dates) {
-  const header = $(`<tr/>`);
-  $.each(dates, (i, date) => {
-    const weekday = new Date(date + "T00:00").getDay();
-    header.append($(`<th/>`).addClass(isWeekend(date) ? "weekend" : "")
-      .append($(`<div/>`).text(`Day${i + 1}`))
-      .append($(`<small class="text-muted"/>`).text(`${date.slice(8)} ${WEEKDAYS[weekday]}`)));
-  });
-  return header;
-}
-
-function isWeekend(date) {
-  const weekday = new Date(date + "T00:00").getDay();
-  return weekday === 0 || weekday === 6;
-}
-
-// Table from "Сценарий работы": one row per line, one column per day, "day crew, night crew" in each cell
+// Gantt chart of the crew schedule: one row per line, one bar per shift with the crew that works it
 function renderRoster(roster) {
-  loadedRoster = roster;
   $("#monthInput").val(roster.month);
-  const lineVisualization = $("#lineVisualization");
-  lineVisualization.children().remove();
+  byLineGroupDataSet.clear();
+  byLineItemDataSet.clear();
   if (roster.lines.length === 0) {
-    lineVisualization.append($(`<p/>`).text("There is no crew schedule: no lines or not enough crews (4 per line). Press Generate."));
+    showSimpleError("There is no crew schedule: no lines or not enough crews (4 per line). Press Generate.");
     return;
   }
 
-  const header = dayHeader(scheduleDays(roster)).prepend($(`<th/>`).text("Line"));
-  const body = $(`<tbody/>`);
   $.each(roster.lines, (index, lineSchedule) => {
-    const row = $(`<tr/>`).append($(`<th/>`).text(lineSchedule.line.name));
+    const line = lineSchedule.line;
+    byLineGroupDataSet.add({id: line.id, content: $(`<div/>`).append($(`<h5 class="card-title mb-1"/>`).text(line.name)).html()});
     $.each(lineSchedule.days, (i, day) => {
-      row.append($(`<td/>`).addClass(isWeekend(day.date) ? "weekend" : "")
-        .append(crewElement(day.dayCrew, "Day 08:00-20:00"))
-        .append(", ")
-        .append(crewElement(day.nightCrew, "Night 20:00-08:00")));
+      const date = JSJoda.LocalDate.parse(day.date);
+      addCrewShiftItem(line, day.dayCrew, date.atTime(DAY_SHIFT_START), date.atTime(NIGHT_SHIFT_START));
+      addCrewShiftItem(line, day.nightCrew, date.atTime(NIGHT_SHIFT_START), date.plusDays(1).atTime(DAY_SHIFT_START));
     });
-    body.append(row);
   });
-  lineVisualization.append($(`<table class="table table-bordered table-sm schedule"/>`)
-    .append($(`<thead/>`).append(header))
-    .append(body));
+  setWindow(roster);
 }
 
-function crewElement(crew, shift) {
+function addCrewShiftItem(line, crew, start, end) {
   if (crew == null) {
-    return $(`<span/>`).text("-");
+    return;
   }
-  return $(`<span class="crew"/>`)
-    .css("background-color", pickColor("crew" + crew.id))
-    .attr("title", `${shift}, crew ${crew.id}`)
-    .text(crew.name == null ? crew.id : crew.name.trim());
+  const crewName = crew.name == null ? String(crew.id) : crew.name.trim();
+  const element = $(`<div class="card-body p-2"/>`)
+    .append($(`<h5 class="card-title mb-1"/>`).text(crewName))
+    .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${start.format(timeFormat)} - ${end.format(timeFormat)}`));
+  byLineItemDataSet.add({
+    id: `${line.id}_${start}`, group: line.id,
+    content: element.html(),
+    start: start.toString(), end: end.toString(),
+    style: "background-color: " + pickColor("crew" + crew.id)
+  });
 }
 
-// One row per employee: on which day and shift the solver put them
-function renderEmployees(schedule) {
-  const employeeVisualization = $("#employeeVisualization");
-  employeeVisualization.children().remove();
-  const dates = loadedRoster == null ? [] : scheduleDays(loadedRoster);
+// Shows the first week of the month; scroll or zoom to see the rest
+function setWindow(roster) {
+  const firstDay = JSJoda.LocalDate.parse(roster.lines[0].days[0].date);
+  byLineTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
+  byEmployeeTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
+}
 
-  const positionsByEmployee = new Map();
+// Gantt chart of the solution: one row per employee, one bar per assigned position
+function renderEmployees(schedule) {
+  byEmployeeGroupDataSet.clear();
+  byEmployeeItemDataSet.clear();
+
+  const employees = new Map();
   $.each(schedule.positions, (index, position) => {
     if (position.employee != null) {
-      if (!positionsByEmployee.has(position.employee.id)) {
-        positionsByEmployee.set(position.employee.id, {employee: position.employee, byDate: new Map()});
-      }
-      positionsByEmployee.get(position.employee.id).byDate.set(position.crewShift.date, position);
+      employees.set(position.employee.id, position.employee);
     }
   });
-  if (positionsByEmployee.size === 0) {
-    employeeVisualization.append($(`<p/>`).text("No employees are assigned yet."));
-    return;
-  }
+  [...employees.values()]
+    .sort((a, b) => a.fullName.localeCompare(b.fullName))
+    .forEach(employee => byEmployeeGroupDataSet.add({id: employee.id, content: employee.fullName}));
 
-  const header = dayHeader(dates).prepend($(`<th/>`).text("Employee")).append($(`<th/>`).text("Shifts"));
-  const body = $(`<tbody/>`);
-  [...positionsByEmployee.values()]
-    .sort((a, b) => a.employee.fullName.localeCompare(b.employee.fullName))
-    .forEach(({employee, byDate}) => {
-      const row = $(`<tr/>`).append($(`<th/>`).text(employee.fullName));
-      $.each(dates, (i, date) => {
-        const position = byDate.get(date);
-        const cell = $(`<td/>`).addClass(isWeekend(date) ? "weekend" : "");
-        if (position != null) {
-          cell.append($(`<span class="crew"/>`)
-            .css("background-color", pickColor("crew" + position.crewShift.crew.id))
-            .attr("title", `${position.crewShift.line.name}, ${position.crewShift.crew.name}, ${position.role.name}`)
-            .text(position.crewShift.type === "DAY" ? "D" : "N"));
-        }
-        row.append(cell);
-      });
-      row.append($(`<td/>`).text(byDate.size));
-      body.append(row);
+  $.each(schedule.positions, (index, position) => {
+    if (position.employee == null) {
+      return;
+    }
+    const crewShift = position.crewShift;
+    const element = $(`<div class="card-body p-2"/>`)
+      .append($(`<h5 class="card-title mb-1"/>`).text(position.role.name))
+      .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${crewShift.line.name}, ${crewShift.crew.name}`));
+    byEmployeeItemDataSet.add({
+      id: position.id, group: position.employee.id,
+      content: element.html(),
+      start: crewShift.start, end: crewShift.end,
+      style: "background-color: " + pickColor("crew" + crewShift.crew.id)
     });
-  employeeVisualization.append($(`<table class="table table-bordered table-sm schedule"/>`)
-    .append($(`<thead/>`).append(header))
-    .append(body));
+  });
 }
 
 function solve() {
