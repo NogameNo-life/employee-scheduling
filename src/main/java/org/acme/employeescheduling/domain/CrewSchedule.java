@@ -19,6 +19,14 @@ import lombok.Setter;
 @NoArgsConstructor
 public class CrewSchedule {
 
+    /** Production lines (PLR_PLINES), also the ones that got no crews. */
+    @ProblemFactCollectionProperty
+    private List<Line> lines;
+
+    /** Crews, each with its own employees. */
+    @ProblemFactCollectionProperty
+    private List<Crew> crews;
+
     @ProblemFactCollectionProperty
     @ValueRangeProvider
     private List<Employee> employees;
@@ -35,7 +43,10 @@ public class CrewSchedule {
 
     private SolverStatus solverStatus;
 
-    public CrewSchedule(List<Employee> employees, List<CrewShift> crewShifts, List<Position> positions) {
+    public CrewSchedule(List<Line> lines, List<Crew> crews, List<Employee> employees, List<CrewShift> crewShifts,
+            List<Position> positions) {
+        this.lines = lines;
+        this.crews = crews;
         this.employees = employees;
         this.crewShifts = crewShifts;
         this.positions = positions;

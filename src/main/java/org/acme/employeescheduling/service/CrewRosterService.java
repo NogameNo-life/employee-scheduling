@@ -57,14 +57,20 @@ public class CrewRosterService {
         List<CrewShift> crewShifts = rotationGenerator.generate(month.atDay(1), month.atEndOfMonth(),
                 month.atDay(1), crewsByLine);
         LOGGER.info("Crew schedule for {}: {} lines, {} crew shifts.", month, crewsByLine.size(), crewShifts.size());
-        return scheduleFactory.create(crewDataCache.getAll(), crewShifts);
+        return scheduleFactory.create(crewDataCache.getAll(), crewDataCache.getLines(), crewShifts);
     }
 
     /** The crew schedule of a version, grouped by line and day for the frontend. */
     public Rotation toRotation(CrewSchedule schedule) {
         List<CrewShift> crewShifts = schedule.getCrewShifts();
         YearMonth month = crewShifts.isEmpty() ? YearMonth.now() : YearMonth.from(crewShifts.get(0).getDate());
-        return new Rotation(month, rotationGenerator.toLineSchedules(crewShifts));
+        Map<Line, LineSchedule> byLine = new LinkedHashMap<>();
+        rotationGenerator.toLineSchedules(crewShifts).forEach(lineSchedule -> byLine.put(lineSchedule.line(), lineSchedule));
+        // Every line of the version, also the ones without crews (not enough crews), so the frontend shows them all
+        List<LineSchedule> lines = schedule.getLines().stream()
+                .map(line -> byLine.getOrDefault(line, new LineSchedule(line, List.of())))
+                .toList();
+        return new Rotation(month, lines);
     }
 
     /**

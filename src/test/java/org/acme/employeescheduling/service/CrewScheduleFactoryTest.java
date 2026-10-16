@@ -27,14 +27,16 @@ class CrewScheduleFactoryTest {
         Role role = new Role(10, "Packer");
         Employee anna = new Employee(100, "Anna", crew, Set.of(role));
         CrewData data = new CrewData(List.of(crew), List.of(role), List.of(anna), Map.of(1, Map.of(role, 2)));
-        CrewShift shift = new CrewShift("s1", LocalDate.of(2026, 11, 1), ShiftType.DAY, new Line("L1", "Line 1"), crew);
+        Line line = new Line("L1", "Line 1");
+        CrewShift shift = new CrewShift("s1", LocalDate.of(2026, 11, 1), ShiftType.DAY, line, crew);
 
-        CrewSchedule source = factory.create(data, List.of(shift));
+        CrewSchedule source = factory.create(data, List.of(line), List.of(shift));
         source.getPositions().get(0).setEmployee(anna);
         source.getPositions().get(0).setPinned(true);
 
         CrewSchedule copy = factory.copyOf(source, data);
 
+        assertThat(copy.getLines()).containsExactly(line);
         assertThat(copy.getPositions()).hasSize(2);
         Position copied = copy.getPositions().get(0);
         assertThat(copied).isNotSameAs(source.getPositions().get(0));

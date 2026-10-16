@@ -11,6 +11,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
+import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.domain.Position;
 import org.acme.employeescheduling.domain.Role;
 
@@ -21,7 +22,7 @@ import org.acme.employeescheduling.domain.Role;
 @ApplicationScoped
 public class CrewScheduleFactory {
 
-    public CrewSchedule create(CrewData data, List<CrewShift> crewShifts) {
+    public CrewSchedule create(CrewData data, List<Line> lines, List<CrewShift> crewShifts) {
         List<Position> positions = new ArrayList<>();
         for (CrewShift crewShift : crewShifts) {
             Map<Role, Integer> rolesNeeded = data.composition().getOrDefault(crewShift.getCrew().getId(), Map.of());
@@ -32,7 +33,7 @@ public class CrewScheduleFactory {
                 }
             }
         }
-        return new CrewSchedule(data.employees(), crewShifts, positions);
+        return new CrewSchedule(lines, data.crews(), data.employees(), crewShifts, positions);
     }
 
     /**
@@ -40,7 +41,7 @@ public class CrewScheduleFactory {
      * New {@link Position} objects are created, because the solver changes the positions of the version it solves.
      */
     public CrewSchedule copyOf(CrewSchedule source, CrewData data) {
-        CrewSchedule copy = create(data, source.getCrewShifts());
+        CrewSchedule copy = create(data, source.getLines(), source.getCrewShifts());
         Map<String, Position> sourcePositions = source.getPositions().stream()
                 .collect(Collectors.toMap(Position::getId, Function.identity()));
         Map<Integer, Employee> employeesById = copy.getEmployees().stream()

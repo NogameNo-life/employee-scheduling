@@ -167,7 +167,7 @@ function addCrewShiftItem(line, crew, start, end) {
 
 // Shows the first week of the month; scroll or zoom to see the rest
 function setWindow(roster) {
-  const firstDay = JSJoda.LocalDate.parse(roster.lines[0].days[0].date);
+  const firstDay = JSJoda.YearMonth.parse(roster.month).atDay(1);
   byLineTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
   byEmployeeTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
 }
