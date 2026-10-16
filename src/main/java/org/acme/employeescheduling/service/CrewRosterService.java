@@ -74,27 +74,34 @@ public class CrewRosterService {
     }
 
     /**
-     * Shuffles the crews and gives each line the next 4. Lines left without 4 crews get none
-     * and crews left over get no line; both are logged.
+     * Shuffles the crews and deals them out to the lines one by one (round-robin), so every line gets crews
+     * and, while there are no more crews than lines, every crew works on a different line.
+     * A line gets at most {@link CrewRotationGenerator#CYCLE_LENGTH} crews; crews left over get no line.
      */
     static Map<Line, List<Crew>> assignCrewsToLines(List<Line> lines, List<Crew> crews, Random random) {
+        if (lines.isEmpty()) {
+            LOGGER.warn("There are no lines, so no crew gets a line.");
+            return Map.of();
+        }
         List<Crew> shuffled = new ArrayList<>(crews);
         Collections.shuffle(shuffled, random);
 
-        int size = CrewRotationGenerator.CYCLE_LENGTH;
+        int capacity = lines.size() * CrewRotationGenerator.CYCLE_LENGTH;
         Map<Line, List<Crew>> crewsByLine = new LinkedHashMap<>();
-        int next = 0;
-        for (Line line : lines) {
-            if (next + size > shuffled.size()) {
-                LOGGER.warn("Not enough crews: line {} and the following lines get no crews.", line);
-                break;
+        for (int i = 0; i < Math.min(shuffled.size(), capacity); i++) {
+            Line line = lines.get(i % lines.size());
+            crewsByLine.computeIfAbsent(line, l -> new ArrayList<>()).add(shuffled.get(i));
+        }
+        if (shuffled.size() > capacity) {
+            LOGGER.warn("{} crews have no line (at most {} per line): {}", shuffled.size() - capacity,
+                    CrewRotationGenerator.CYCLE_LENGTH, shuffled.subList(capacity, shuffled.size()));
+        }
+        crewsByLine.forEach((line, lineCrews) -> {
+            if (lineCrews.size() < CrewRotationGenerator.CYCLE_LENGTH) {
+                LOGGER.warn("Line {} has only {} crews: some of its shifts have no crew.", line, lineCrews.size());
             }
-            crewsByLine.put(line, List.copyOf(shuffled.subList(next, next + size)));
-            next += size;
-        }
-        if (next < shuffled.size()) {
-            LOGGER.warn("{} crews have no line: {}", shuffled.size() - next, shuffled.subList(next, shuffled.size()));
-        }
+        });
+        crewsByLine.replaceAll((line, lineCrews) -> List.copyOf(lineCrews));
         return crewsByLine;
     }
 

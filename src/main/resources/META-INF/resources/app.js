@@ -139,7 +139,7 @@ function renderRoster(roster) {
 
   $.each(roster.lines, (index, lineSchedule) => {
     const line = lineSchedule.line;
-    byLineGroupDataSet.add({id: line.id, content: $(`<div/>`).append($(`<h5 class="card-title mb-1"/>`).text(line.name)).html()});
+    byLineGroupDataSet.add({id: line.id, order: index, content: $(`<div/>`).append($(`<h5 class="card-title mb-1"/>`).text(line.name)).html()});
     $.each(lineSchedule.days, (i, day) => {
       const date = JSJoda.LocalDate.parse(day.date);
       addCrewShiftItem(line, day.dayCrew, date.atTime(DAY_SHIFT_START), date.atTime(NIGHT_SHIFT_START));
@@ -185,7 +185,7 @@ function renderEmployees(schedule) {
   });
   [...employees.values()]
     .sort((a, b) => a.fullName.localeCompare(b.fullName))
-    .forEach(employee => byEmployeeGroupDataSet.add({id: employee.id, content: employee.fullName}));
+    .forEach((employee, index) => byEmployeeGroupDataSet.add({id: employee.id, order: index, content: employee.fullName}));
 
   $.each(schedule.positions, (index, position) => {
     if (position.employee == null) {

@@ -83,9 +83,11 @@ public class CrewDataCache {
         return Optional.ofNullable(linesById.get(lineId.trim()));
     }
 
-    /** All lines, sorted by code. */
+    /** All lines, sorted by name. */
     public List<Line> getLines() {
-        return linesById.values().stream().sorted(Comparator.comparing(Line::getId)).toList();
+        return linesById.values().stream()
+                .sorted(Comparator.comparing(Line::getName).thenComparing(Line::getId))
+                .toList();
     }
 
     /** Crews of all loaded departments, sorted by number. */

@@ -102,6 +102,23 @@ class CrewRotationGeneratorTest {
     }
 
     @Test
+    void lineWithTwoCrewsKeepsTheRotationAndLeavesTheOtherShiftsEmpty() {
+        Crew c1 = new Crew(1, "Cr1");
+        Crew c2 = new Crew(2, "Cr2");
+        LocalDate day1 = LocalDate.of(2026, 11, 1);
+
+        List<LineSchedule> schedules = generator.toLineSchedules(generator.generate(day1, day1.plusDays(3), day1,
+                Map.of(new Line("L1", "Line 1"), List.of(c1, c2))));
+
+        // Day1: Cr1 day | Day2: Cr2 day, Cr1 night | Day3: Cr2 night | Day4: nobody
+        List<LineSchedule.LineDay> days = schedules.get(0).days();
+        assertThat(days).hasSize(3);
+        assertThat(days.get(0).crews()).isEqualTo(Pair.of(c1, null));
+        assertThat(days.get(1).crews()).isEqualTo(Pair.of(c2, c1));
+        assertThat(days.get(2).crews()).isEqualTo(Pair.of(null, c2));
+    }
+
+    @Test
     void rejectsSameCrewTwiceOnOneLine() {
         Crew c1 = new Crew(1, "Cr1");
         LocalDate day1 = LocalDate.of(2026, 11, 1);

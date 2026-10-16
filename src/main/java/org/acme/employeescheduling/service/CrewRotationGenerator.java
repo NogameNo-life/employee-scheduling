@@ -30,6 +30,7 @@ import org.apache.commons.lang3.tuple.Pair;
  * DAY      Cr1   Cr3   Cr4   Cr2   Cr1
  * NIGHT    Cr2   Cr1   Cr3   Cr4   Cr2
  * </pre>
+ * A line with fewer than 4 crews keeps the same rotation; the shifts of the missing crews have no crew.
  * Keep {@code anchorDate} fixed (e.g. the date the rotation started) so the
  * pattern continues correctly from one month to the next.
  */
@@ -47,8 +48,8 @@ public class CrewRotationGenerator {
             for (Map.Entry<Line, List<Crew>> entry : crewsByLine.entrySet()) {
                 Line line = entry.getKey();
                 List<Crew> crews = entry.getValue();
-                if (crews.size() != CYCLE_LENGTH) {
-                    throw new IllegalArgumentException("Line " + line + " must have exactly "
+                if (crews.isEmpty() || crews.size() > CYCLE_LENGTH) {
+                    throw new IllegalArgumentException("Line " + line + " must have 1 to "
                             + CYCLE_LENGTH + " crews, but has " + crews.size() + ".");
                 }
                 if (new HashSet<>(crews).size() != crews.size()) {
