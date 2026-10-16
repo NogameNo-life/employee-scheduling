@@ -13,7 +13,7 @@ public class EmployeeScheduleSolverExceptionMapper implements ExceptionMapper<Em
         return Response
                 .status(exception.getStatus())
                 .type(MediaType.APPLICATION_JSON)
-                .entity(new ErrorInfo(exception.getJobId(), exception.getMessage()))
+                .entity(new ErrorInfo(exception.getSessionId(), exception.getMessage()))
                 .build();
     }
 }
