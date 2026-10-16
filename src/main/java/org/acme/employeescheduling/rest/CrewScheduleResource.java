@@ -1,26 +1,16 @@
 package org.acme.employeescheduling.rest;
 
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
-import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.function.Function;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
 
 import jakarta.inject.Inject;
 import jakarta.ws.rs.BadRequestException;
-import jakarta.ws.rs.Consumes;
-import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
-import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
@@ -30,21 +20,23 @@ import ai.timefold.solver.core.api.score.analysis.ScoreAnalysis;
 import ai.timefold.solver.core.api.score.buildin.hardmediumsoft.HardMediumSoftScore;
 import ai.timefold.solver.core.api.solver.SolutionManager;
 import ai.timefold.solver.core.api.solver.SolverManager;
+import ai.timefold.solver.core.api.solver.SolverStatus;
 
-import org.acme.employeescheduling.domain.Crew;
+import org.acme.employeescheduling.config.SessionHeaderFilter;
 import org.acme.employeescheduling.domain.CrewSchedule;
-import org.acme.employeescheduling.domain.CrewShift;
-import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.repository.CrewScheduleRepository;
+import org.acme.employeescheduling.repository.CrewScheduleRepository.ScheduleVersion;
 import org.acme.employeescheduling.rest.exception.EmployeeScheduleSolverException;
-import org.acme.employeescheduling.service.CrewData;
-import org.acme.employeescheduling.service.CrewDataCache;
-import org.acme.employeescheduling.service.CrewRotationGenerator;
-import org.acme.employeescheduling.service.CrewScheduleFactory;
 import org.acme.employeescheduling.service.CrewRosterService;
-import org.acme.employeescheduling.service.CrewRosterService.Roster;
+import org.acme.employeescheduling.service.CrewRosterService.Rotation;
+import org.acme.employeescheduling.service.LineSchedule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Every endpoint works with the schedule version of the caller (X-Session-Id header,
+ * {@value SessionHeaderFilter#DEFAULT_SESSION_ID} when missing), like food-packaging-quarkus.
+ */
 @Path("crew-schedules")
 public class CrewScheduleResource {
 
@@ -52,182 +44,108 @@ public class CrewScheduleResource {
 
     private final SolverManager<CrewSchedule, String> solverManager;
     private final SolutionManager<CrewSchedule, HardMediumSoftScore> solutionManager;
-    private final CrewDataCache crewDataCache;
-    private final CrewRotationGenerator rotationGenerator;
-    private final CrewScheduleFactory scheduleFactory;
+    private final CrewScheduleRepository repository;
+    private final CrewScheduleSessionService sessionService;
     private final CrewRosterService rosterService;
-
-    private final ConcurrentMap<String, Job> jobIdToJob = new ConcurrentHashMap<>();
 
     @Inject
     public CrewScheduleResource(SolverManager<CrewSchedule, String> solverManager,
-            SolutionManager<CrewSchedule, HardMediumSoftScore> solutionManager, CrewDataCache crewDataCache,
-            CrewRotationGenerator rotationGenerator, CrewScheduleFactory scheduleFactory,
-            CrewRosterService rosterService) {
+            SolutionManager<CrewSchedule, HardMediumSoftScore> solutionManager, CrewScheduleRepository repository,
+            CrewScheduleSessionService sessionService, CrewRosterService rosterService) {
         this.solverManager = solverManager;
         this.solutionManager = solutionManager;
-        this.crewDataCache = crewDataCache;
-        this.rotationGenerator = rotationGenerator;
-        this.scheduleFactory = scheduleFactory;
+        this.repository = repository;
+        this.sessionService = sessionService;
         this.rosterService = rosterService;
     }
 
+    /** The whole version: positions with assigned employees, score and solver status. */
     @GET
     @Produces(MediaType.APPLICATION_JSON)
-    public Collection<String> list() {
-        return jobIdToJob.keySet();
+    public CrewSchedule get(@HeaderParam(SessionHeaderFilter.HEADER) String sessionId) {
+        CrewSchedule schedule = sessionService.requireVersion(sessionId).schedule();
+        schedule.setSolverStatus(solverManager.getSolverStatus(sessionService.getProblemId(sessionId)));
+        return schedule;
     }
 
-    /** Takes crew data and lines from the cache, generates the crew schedule and starts solving. Returns the job ID. */
-    @POST
-    @Path("solve")
-    @Consumes(MediaType.APPLICATION_JSON)
-    @Produces(MediaType.TEXT_PLAIN)
-    public String solve(SolveRequest request) {
-        validate(request);
-        CrewData data = crewDataCache.get(request.department());
-        List<CrewShift> crewShifts = generateRotation(() -> rotationGenerator.generate(
-                request.from(), request.to(), request.anchorDate(), crewsByLine(request, data)));
-        return startSolving(scheduleFactory.create(data, crewShifts));
-    }
-
-    /** Assigns employees to the crew schedule generated at startup or by the last {@code init}. Returns the job ID. */
-    @POST
-    @Path("rotation/solve")
-    @Produces(MediaType.TEXT_PLAIN)
-    public String solveRotation() {
-        Roster roster = rosterService.getRoster();
-        if (roster.crewShifts().isEmpty()) {
-            throw new BadRequestException("There is no crew schedule to solve. Generate it first.");
-        }
-        return startSolving(scheduleFactory.create(crewDataCache.getAll(), roster.crewShifts()));
-    }
-
-    private String startSolving(CrewSchedule problem) {
-        LOGGER.info("Solving {} positions, {} employees, {} crew shifts.",
-                problem.getPositions().size(), problem.getEmployees().size(), problem.getCrewShifts().size());
-
-        String jobId = UUID.randomUUID().toString();
-        jobIdToJob.put(jobId, Job.ofSchedule(problem));
-        solverManager.solveBuilder()
-                .withProblemId(jobId)
-                .withProblemFinder(id -> jobIdToJob.get(jobId).schedule())
-                .withBestSolutionConsumer(solution -> jobIdToJob.put(jobId, Job.ofSchedule(solution)))
-                .withExceptionHandler((id, exception) -> {
-                    jobIdToJob.put(jobId, Job.ofException(exception));
-                    LOGGER.error("Failed solving jobId ({}).", jobId, exception);
-                })
-                .run();
-        return jobId;
-    }
-
-    /** The crew schedule generated at startup or by the last {@code init}. */
+    /** The crew schedule of the version: day crew and night crew for every line and day. */
     @GET
     @Path("rotation")
     @Produces(MediaType.APPLICATION_JSON)
-    public Roster rotation() {
-        return rosterService.getRoster();
+    public RotationResponse rotation(@HeaderParam(SessionHeaderFilter.HEADER) String sessionId) {
+        return toResponse(sessionId, sessionService.requireVersion(sessionId));
     }
 
     /**
-     * Reloads data from the DB, gives crews to lines at random and generates the crew schedule
-     * for the month of {@code date} (yyyy-MM-dd, default: today).
+     * Reloads data from the DB, gives crews to lines at random and makes a new version for the month of
+     * {@code date} (yyyy-MM-dd, default: today). Only the caller's version is replaced.
      */
     @POST
     @Path("init")
     @Produces(MediaType.APPLICATION_JSON)
-    public Roster init(@QueryParam("date") String date) {
+    public RotationResponse init(@HeaderParam(SessionHeaderFilter.HEADER) String sessionId,
+            @QueryParam("date") String date) {
+        LocalDate day;
         try {
-            return rosterService.init(date == null || date.isBlank() ? LocalDate.now() : LocalDate.parse(date));
+            day = date == null || date.isBlank() ? LocalDate.now() : LocalDate.parse(date);
         } catch (DateTimeParseException e) {
             throw new BadRequestException("date must be yyyy-MM-dd, got: " + date);
         }
+        solverManager.terminateEarly(sessionService.getProblemId(sessionId));
+        return toResponse(sessionId, sessionService.init(sessionId, day));
     }
 
+    /** Assigns employees in the caller's version. The best solution is stored in the same version. */
+    @POST
+    @Path("solve")
+    @Produces(MediaType.APPLICATION_JSON)
+    public SolveResponse solve(@HeaderParam(SessionHeaderFilter.HEADER) String sessionId) {
+        String problemId = sessionService.getProblemId(sessionId);
+        if (solverManager.getSolverStatus(problemId) != SolverStatus.NOT_SOLVING) {
+            throw new EmployeeScheduleSolverException(sessionId, Response.Status.CONFLICT,
+                    "This schedule version is already being solved.");
+        }
+        ScheduleVersion version = sessionService.requireVersion(sessionId);
+        if (version.schedule().getPositions().isEmpty()) {
+            throw new BadRequestException("There is nothing to solve. Generate the crew schedule first.");
+        }
+        LOGGER.info("Session {}: solving version {} ({} positions, {} employees).", sessionId, version.id(),
+                version.schedule().getPositions().size(), version.schedule().getEmployees().size());
+
+        solverManager.solveBuilder()
+                .withProblemId(problemId)
+                .withProblemFinder(id -> version.schedule())
+                .withBestSolutionConsumer(solution -> repository.update(sessionId, version.id(), solution))
+                .withExceptionHandler((id, exception) -> LOGGER.error("Session {}: solving failed.", sessionId,
+                        exception))
+                .run();
+        return new SolveResponse(sessionId, version.id(), "Solving started");
+    }
+
+    @POST
+    @Path("stopSolving")
+    @Produces(MediaType.APPLICATION_JSON)
+    public CrewSchedule stopSolving(@HeaderParam(SessionHeaderFilter.HEADER) String sessionId) {
+        solverManager.terminateEarly(sessionService.getProblemId(sessionId));
+        return get(sessionId);
+    }
+
+    /** Which constraints are broken in the caller's version, and by which positions. */
     @GET
-    @Path("{jobId}")
+    @Path("analyze")
     @Produces(MediaType.APPLICATION_JSON)
-    public CrewSchedule get(@PathParam("jobId") String jobId) {
-        CrewSchedule schedule = getOrThrow(jobId);
-        schedule.setSolverStatus(solverManager.getSolverStatus(jobId));
-        return schedule;
+    public ScoreAnalysis<HardMediumSoftScore> analyze(@HeaderParam(SessionHeaderFilter.HEADER) String sessionId) {
+        return solutionManager.analyze(sessionService.requireVersion(sessionId).schedule());
     }
 
-    /** Which constraints are broken in the current solution of the job, and by which positions. */
-    @GET
-    @Path("{jobId}/analyze")
-    @Produces(MediaType.APPLICATION_JSON)
-    public ScoreAnalysis<HardMediumSoftScore> analyze(@PathParam("jobId") String jobId) {
-        return solutionManager.analyze(getOrThrow(jobId));
+    private RotationResponse toResponse(String sessionId, ScheduleVersion version) {
+        Rotation rotation = rosterService.toRotation(version.schedule());
+        return new RotationResponse(sessionId, version.id(), rotation.month(), rotation.lines());
     }
 
-    @DELETE
-    @Path("{jobId}")
-    @Produces(MediaType.APPLICATION_JSON)
-    public CrewSchedule stop(@PathParam("jobId") String jobId) {
-        solverManager.terminateEarly(jobId);
-        return get(jobId);
+    public record RotationResponse(String sessionId, String versionId, YearMonth month, List<LineSchedule> lines) {
     }
 
-    private CrewSchedule getOrThrow(String jobId) {
-        Job job = jobIdToJob.get(jobId);
-        if (job == null) {
-            throw new EmployeeScheduleSolverException(jobId, Response.Status.NOT_FOUND, "No schedule found.");
-        }
-        if (job.exception() != null) {
-            throw new EmployeeScheduleSolverException(jobId, job.exception());
-        }
-        return job.schedule();
-    }
-
-    private Map<Line, List<Crew>> crewsByLine(SolveRequest request, CrewData data) {
-        Map<Integer, Crew> crewsById = data.crews().stream()
-                .collect(Collectors.toMap(Crew::getId, Function.identity()));
-        Map<Line, List<Crew>> crewsByLine = new LinkedHashMap<>();
-        for (SolveRequest.LineRotation lr : request.lines()) {
-            if (lr.crewIds() == null) {
-                throw new BadRequestException("crewIds are required for line " + lr.lineId());
-            }
-            List<Crew> crews = lr.crewIds().stream().map(id -> {
-                Crew crew = crewsById.get(id);
-                if (crew == null) {
-                    throw new BadRequestException("Unknown crew " + id + " in department " + request.department());
-                }
-                return crew;
-            }).toList();
-            Line line = crewDataCache.getLine(lr.lineId())
-                    .orElseThrow(() -> new BadRequestException("Unknown line " + lr.lineId() + " (PLR_PLINES.KRC)."));
-            crewsByLine.put(line, crews);
-        }
-        return crewsByLine;
-    }
-
-    /** Turns a wrong rotation (not 4 crews, the same crew twice) into 400 Bad Request. */
-    private static <T> T generateRotation(Supplier<T> generator) {
-        try {
-            return generator.get();
-        } catch (IllegalArgumentException e) {
-            throw new BadRequestException(e.getMessage());
-        }
-    }
-
-    private static void validate(SolveRequest r) {
-        if (r == null || r.department() == null || r.from() == null || r.to() == null
-                || r.anchorDate() == null || r.lines() == null || r.lines().isEmpty()) {
-            throw new BadRequestException("department, from, to, anchorDate and lines are required.");
-        }
-        if (r.to().isBefore(r.from())) {
-            throw new BadRequestException("'to' must not be before 'from'.");
-        }
-    }
-
-    private record Job(CrewSchedule schedule, Throwable exception) {
-        static Job ofSchedule(CrewSchedule schedule) {
-            return new Job(schedule, null);
-        }
-
-        static Job ofException(Throwable exception) {
-            return new Job(null, exception);
-        }
+    public record SolveResponse(String sessionId, String versionId, String message) {
     }
 }

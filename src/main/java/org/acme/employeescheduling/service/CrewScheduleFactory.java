@@ -3,11 +3,14 @@ package org.acme.employeescheduling.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
+import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Position;
 import org.acme.employeescheduling.domain.Role;
 
@@ -30,5 +33,25 @@ public class CrewScheduleFactory {
             }
         }
         return new CrewSchedule(data.employees(), crewShifts, positions);
+    }
+
+    /**
+     * A separate version with the same crew shifts and the same assignments as {@code source}.
+     * New {@link Position} objects are created, because the solver changes the positions of the version it solves.
+     */
+    public CrewSchedule copyOf(CrewSchedule source, CrewData data) {
+        CrewSchedule copy = create(data, source.getCrewShifts());
+        Map<String, Position> sourcePositions = source.getPositions().stream()
+                .collect(Collectors.toMap(Position::getId, Function.identity()));
+        Map<Integer, Employee> employeesById = copy.getEmployees().stream()
+                .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        for (Position position : copy.getPositions()) {
+            Position sourcePosition = sourcePositions.get(position.getId());
+            if (sourcePosition != null && sourcePosition.getEmployee() != null) {
+                position.setEmployee(employeesById.get(sourcePosition.getEmployee().getId()));
+                position.setPinned(sourcePosition.isPinned());
+            }
+        }
+        return copy;
     }
 }

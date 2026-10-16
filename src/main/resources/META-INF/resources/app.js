@@ -1,5 +1,6 @@
 var autoRefreshIntervalId = null;
-let jobId = null;
+// Every browser tab is one user with its own schedule version (same key as production-automation-portal-react)
+const sessionId = getSessionId();
 let loadedSchedule = null;
 
 const DAY_SHIFT_START = JSJoda.LocalTime.of(8, 0);
@@ -66,7 +67,8 @@ function setupAjax() {
   $.ajaxSetup({
     headers: {
       'Content-Type': 'application/json',
-      'Accept': 'application/json,text/plain', // plain text is required by solve() returning UUID of the solver job
+      'Accept': 'application/json',
+      'X-Session-Id': sessionId,
     }
   });
 
@@ -93,18 +95,15 @@ function setupAjax() {
 function refreshSchedule() {
   $.getJSON("/crew-schedules/rotation", function (roster) {
     renderRoster(roster);
+    refreshSolution();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Getting the crew schedule failed.", xhr);
   });
-  refreshSolution();
 }
 
 // Employees assigned by the solver (after "Solve")
 function refreshSolution() {
-  if (jobId == null) {
-    return;
-  }
-  $.getJSON("/crew-schedules/" + jobId, function (schedule) {
+  $.getJSON("/crew-schedules", function (schedule) {
     loadedSchedule = schedule;
     refreshSolvingButtons(schedule.solverStatus != null && schedule.solverStatus !== "NOT_SOLVING");
     $("#score").text("Score: " + (schedule.score == null ? "?" : schedule.score));
@@ -120,13 +119,8 @@ function refreshSolution() {
 function generate() {
   const month = $("#monthInput").val();
   $.post("/crew-schedules/init?date=" + (month ? month + "-01" : ""), function (roster) {
-    jobId = null;
-    loadedSchedule = null;
-    $("#score").text("Score: ?");
-    $("#unassignedPositions").text("");
-    byEmployeeGroupDataSet.clear();
-    byEmployeeItemDataSet.clear();
     renderRoster(roster);
+    refreshSolution();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Generating the crew schedule failed.", xhr);
   });
@@ -134,6 +128,7 @@ function generate() {
 
 // Gantt chart of the crew schedule: one row per line, one bar per shift with the crew that works it
 function renderRoster(roster) {
+  $("#version").text(`Session: ${roster.sessionId}, version: ${roster.versionId}`);
   $("#monthInput").val(roster.month);
   byLineGroupDataSet.clear();
   byLineItemDataSet.clear();
@@ -210,10 +205,9 @@ function renderEmployees(schedule) {
 }
 
 function solve() {
-  $.post("/crew-schedules/rotation/solve", function (data) {
-    jobId = data;
+  $.post("/crew-schedules/solve", function () {
     refreshSolvingButtons(true);
-  }, "text").fail(function (xhr, ajaxOptions, thrownError) {
+  }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Start solving failed.", xhr);
   });
 }
@@ -226,7 +220,7 @@ function analyze() {
     scoreAnalysisModalContent.text("No score to analyze yet, please first press the 'solve' button.");
   } else {
     $('#scoreAnalysisScoreLabel').text(`(${loadedSchedule.score})`);
-    $.getJSON(`/crew-schedules/${jobId}/analyze`, function (scoreAnalysis) {
+    $.getJSON("/crew-schedules/analyze", function (scoreAnalysis) {
       let constraints = scoreAnalysis.constraints;
       constraints.sort((a, b) => {
         let aComponents = getScoreComponents(a.score), bComponents = getScoreComponents(b.score);
@@ -320,10 +314,24 @@ function refreshSolvingButtons(solving) {
 }
 
 function stopSolving() {
-  $.delete(`/crew-schedules/${jobId}`, function () {
+  $.post("/crew-schedules/stopSolving", function () {
     refreshSolvingButtons(false);
     refreshSolution();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Stop solving failed.", xhr);
   });
+}
+
+function getSessionId() {
+  let id = null;
+  try {
+    id = sessionStorage.getItem("solverSessionId");
+    if (id == null) {
+      id = window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
+      sessionStorage.setItem("solverSessionId", id);
+    }
+  } catch (e) {
+    // No sessionStorage (e.g. blocked): the server uses the default version
+  }
+  return id ?? "";
 }

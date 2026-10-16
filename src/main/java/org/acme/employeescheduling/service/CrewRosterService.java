@@ -10,28 +10,21 @@ import java.util.Map;
 import java.util.Random;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.context.control.ActivateRequestContext;
-import jakarta.enterprise.event.Observes;
-
-import com.fasterxml.jackson.annotation.JsonIgnore;
-
-import io.quarkus.runtime.LaunchMode;
-import io.quarkus.runtime.StartupEvent;
 
 import org.acme.employeescheduling.domain.Crew;
+import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Line;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The crew schedule (step 3) kept in memory.
+ * Builds a new schedule version: the crew schedule (step 3) for one month plus empty positions for the solver.
  *
  * <p>
  * There is no crew -> line table yet, so crews are given to lines at random:
  * all crews are shuffled and every line takes the next {@link CrewRotationGenerator#CYCLE_LENGTH}.
- * The shuffled order is also the rotation order. Generated when the application starts
- * (for the current month) and again on every {@link #init}.
+ * The shuffled order is also the rotation order.
  */
 @ApplicationScoped
 public class CrewRosterService {
@@ -40,34 +33,21 @@ public class CrewRosterService {
 
     private final CrewDataCache crewDataCache;
     private final CrewRotationGenerator rotationGenerator;
+    private final CrewScheduleFactory scheduleFactory;
     private final Random random = new Random();
 
-    private volatile Roster roster = new Roster(YearMonth.now(), Map.of(), List.of(), List.of());
-
-    public CrewRosterService(CrewDataCache crewDataCache, CrewRotationGenerator rotationGenerator) {
+    public CrewRosterService(CrewDataCache crewDataCache, CrewRotationGenerator rotationGenerator,
+            CrewScheduleFactory scheduleFactory) {
         this.crewDataCache = crewDataCache;
         this.rotationGenerator = rotationGenerator;
-    }
-
-    /** Observer calls go through the CDI proxy, so the request context (needed by Hibernate) is active. */
-    @ActivateRequestContext
-    void onStart(@Observes StartupEvent event) {
-        if (LaunchMode.current() == LaunchMode.TEST) {
-            return;
-        }
-        try {
-            init(LocalDate.now());
-        } catch (RuntimeException e) {
-            // Keep the application running (e.g. the DB is not reachable); POST /crew-schedules/init retries.
-            LOGGER.error("Could not generate the crew schedule at startup.", e);
-        }
+        this.scheduleFactory = scheduleFactory;
     }
 
     /**
      * Reloads crews and lines from the DB, gives crews to lines at random
      * and generates the schedule for the month of {@code date}.
      */
-    public Roster init(LocalDate date) {
+    public CrewSchedule createVersion(LocalDate date) {
         crewDataCache.refresh();
         Map<Line, List<Crew>> crewsByLine = assignCrewsToLines(crewDataCache.getLines(),
                 crewDataCache.getAllCrews(), random);
@@ -76,13 +56,15 @@ public class CrewRosterService {
         // The rotation starts on the first day of the month, because the crews are new every time.
         List<CrewShift> crewShifts = rotationGenerator.generate(month.atDay(1), month.atEndOfMonth(),
                 month.atDay(1), crewsByLine);
-        roster = new Roster(month, crewsByLine, crewShifts, rotationGenerator.toLineSchedules(crewShifts));
         LOGGER.info("Crew schedule for {}: {} lines, {} crew shifts.", month, crewsByLine.size(), crewShifts.size());
-        return roster;
+        return scheduleFactory.create(crewDataCache.getAll(), crewShifts);
     }
 
-    public Roster getRoster() {
-        return roster;
+    /** The crew schedule of a version, grouped by line and day for the frontend. */
+    public Rotation toRotation(CrewSchedule schedule) {
+        List<CrewShift> crewShifts = schedule.getCrewShifts();
+        YearMonth month = crewShifts.isEmpty() ? YearMonth.now() : YearMonth.from(crewShifts.get(0).getDate());
+        return new Rotation(month, rotationGenerator.toLineSchedules(crewShifts));
     }
 
     /**
@@ -111,11 +93,8 @@ public class CrewRosterService {
     }
 
     /**
-     * @param crewsByLine 4 crews per line, in rotation order
-     * @param crewShifts the same schedule as problem facts for the solver
-     * @param lines the schedule for the frontend
+     * @param lines day crew and night crew for every line and day
      */
-    public record Roster(YearMonth month, @JsonIgnore Map<Line, List<Crew>> crewsByLine,
-            @JsonIgnore List<CrewShift> crewShifts, List<LineSchedule> lines) {
+    public record Rotation(YearMonth month, List<LineSchedule> lines) {
     }
 }

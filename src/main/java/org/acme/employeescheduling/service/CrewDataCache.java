@@ -34,9 +34,10 @@ public class CrewDataCache {
     private final LineRepository lineRepository;
 
     /** Department (OBJ, trimmed) -> data. */
-    private final ConcurrentMap<String, CrewData> dataByDepartment = new ConcurrentHashMap<>();
+    /** Replaced as a whole by {@link #refresh()}, so other users never see a half-loaded cache. */
+    private volatile ConcurrentMap<String, CrewData> dataByDepartment = new ConcurrentHashMap<>();
     /** Line code (KRC, trimmed) -> line. */
-    private ConcurrentHashMap<String, Line> linesById = new ConcurrentHashMap<>();
+    private volatile ConcurrentHashMap<String, Line> linesById = new ConcurrentHashMap<>();
 
     public CrewDataCache(CrewDataLoader loader, CrewRepository crewRepository, LineRepository lineRepository) {
         this.loader = loader;
@@ -53,10 +54,11 @@ public class CrewDataCache {
         linesById = lines;
 
         List<String> departments = crewRepository.findDepartments().stream().map(String::trim).distinct().toList();
-        dataByDepartment.clear();
+        ConcurrentMap<String, CrewData> data = new ConcurrentHashMap<>();
         for (String department : departments) {
-            dataByDepartment.put(department, loader.load(department));
+            data.put(department, loader.load(department));
         }
+        dataByDepartment = data;
         LOGGER.info("Loaded {} lines and crew data for departments {}.", lines.size(), departments);
     }
 

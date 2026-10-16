@@ -4,24 +4,24 @@ import jakarta.ws.rs.core.Response;
 
 public class EmployeeScheduleSolverException extends RuntimeException {
 
-    private final String jobId;
+    private final String sessionId;
 
     private final Response.Status status;
 
-    public EmployeeScheduleSolverException(String jobId, Response.Status status, String message) {
+    public EmployeeScheduleSolverException(String sessionId, Response.Status status, String message) {
         super(message);
-        this.jobId = jobId;
+        this.sessionId = sessionId;
         this.status = status;
     }
 
-    public EmployeeScheduleSolverException(String jobId, Throwable cause) {
+    public EmployeeScheduleSolverException(String sessionId, Throwable cause) {
         super(cause.getMessage(), cause);
-        this.jobId = jobId;
+        this.sessionId = sessionId;
         this.status = Response.Status.INTERNAL_SERVER_ERROR;
     }
 
-    public String getJobId() {
-        return jobId;
+    public String getSessionId() {
+        return sessionId;
     }
 
     public Response.Status getStatus() {

@@ -92,6 +92,12 @@
             <artifactId>quarkus-hibernate-orm-panache</artifactId>
         </dependency>
 
+        <!-- Cleanup of old session versions -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-scheduler</artifactId>
+        </dependency>
+
         <!-- Pair -->
         <dependency>
             <groupId>org.apache.commons</groupId>
