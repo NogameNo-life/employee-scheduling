@@ -1,5 +1,7 @@
 package org.acme.employeescheduling.rest;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -8,6 +10,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import jakarta.inject.Inject;
@@ -19,6 +22,7 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
@@ -33,6 +37,8 @@ import org.acme.employeescheduling.service.CrewData;
 import org.acme.employeescheduling.service.CrewDataCache;
 import org.acme.employeescheduling.service.CrewRotationGenerator;
 import org.acme.employeescheduling.service.CrewScheduleFactory;
+import org.acme.employeescheduling.service.CrewRosterService;
+import org.acme.employeescheduling.service.CrewRosterService.Roster;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,16 +51,19 @@ public class CrewScheduleResource {
     private final CrewDataCache crewDataCache;
     private final CrewRotationGenerator rotationGenerator;
     private final CrewScheduleFactory scheduleFactory;
+    private final CrewRosterService rosterService;
 
     private final ConcurrentMap<String, Job> jobIdToJob = new ConcurrentHashMap<>();
 
     @Inject
     public CrewScheduleResource(SolverManager<CrewSchedule, String> solverManager, CrewDataCache crewDataCache,
-            CrewRotationGenerator rotationGenerator, CrewScheduleFactory scheduleFactory) {
+            CrewRotationGenerator rotationGenerator, CrewScheduleFactory scheduleFactory,
+            CrewRosterService rosterService) {
         this.solverManager = solverManager;
         this.crewDataCache = crewDataCache;
         this.rotationGenerator = rotationGenerator;
         this.scheduleFactory = scheduleFactory;
+        this.rosterService = rosterService;
     }
 
     @GET
@@ -71,25 +80,8 @@ public class CrewScheduleResource {
     public String solve(SolveRequest request) {
         validate(request);
         CrewData data = crewDataCache.get(request.department());
-        Map<Integer, Crew> crewsById = data.crews().stream()
-                .collect(Collectors.toMap(Crew::getId, Function.identity()));
-
-        Map<Line, List<Crew>> crewsByLine = new LinkedHashMap<>();
-        for (SolveRequest.LineRotation lr : request.lines()) {
-            List<Crew> crews = lr.crewIds().stream().map(id -> {
-                Crew crew = crewsById.get(id);
-                if (crew == null) {
-                    throw new BadRequestException("Unknown crew " + id + " in department " + request.department());
-                }
-                return crew;
-            }).toList();
-            Line line = crewDataCache.getLine(lr.lineId())
-                    .orElseThrow(() -> new BadRequestException("Unknown line " + lr.lineId() + " (PLR_PLINES.KRC)."));
-            crewsByLine.put(line, crews);
-        }
-
-        List<CrewShift> crewShifts = rotationGenerator.generate(
-                request.from(), request.to(), request.anchorDate(), crewsByLine);
+        List<CrewShift> crewShifts = generateRotation(() -> rotationGenerator.generate(
+                request.from(), request.to(), request.anchorDate(), crewsByLine(request, data)));
         CrewSchedule problem = scheduleFactory.create(data, crewShifts);
         LOGGER.info("Solving {} positions, {} employees, {} crew shifts.",
                 problem.getPositions().size(), problem.getEmployees().size(), crewShifts.size());
@@ -106,6 +98,29 @@ public class CrewScheduleResource {
                 })
                 .run();
         return jobId;
+    }
+
+    /** The crew schedule generated at startup or by the last {@code init}. */
+    @GET
+    @Path("rotation")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Roster rotation() {
+        return rosterService.getRoster();
+    }
+
+    /**
+     * Reloads data from the DB, gives crews to lines at random and generates the crew schedule
+     * for the month of {@code date} (yyyy-MM-dd, default: today).
+     */
+    @POST
+    @Path("init")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Roster init(@QueryParam("date") String date) {
+        try {
+            return rosterService.init(date == null || date.isBlank() ? LocalDate.now() : LocalDate.parse(date));
+        } catch (DateTimeParseException e) {
+            throw new BadRequestException("date must be yyyy-MM-dd, got: " + date);
+        }
     }
 
     @GET
@@ -134,6 +149,37 @@ public class CrewScheduleResource {
             throw new EmployeeScheduleSolverException(jobId, job.exception());
         }
         return job.schedule();
+    }
+
+    private Map<Line, List<Crew>> crewsByLine(SolveRequest request, CrewData data) {
+        Map<Integer, Crew> crewsById = data.crews().stream()
+                .collect(Collectors.toMap(Crew::getId, Function.identity()));
+        Map<Line, List<Crew>> crewsByLine = new LinkedHashMap<>();
+        for (SolveRequest.LineRotation lr : request.lines()) {
+            if (lr.crewIds() == null) {
+                throw new BadRequestException("crewIds are required for line " + lr.lineId());
+            }
+            List<Crew> crews = lr.crewIds().stream().map(id -> {
+                Crew crew = crewsById.get(id);
+                if (crew == null) {
+                    throw new BadRequestException("Unknown crew " + id + " in department " + request.department());
+                }
+                return crew;
+            }).toList();
+            Line line = crewDataCache.getLine(lr.lineId())
+                    .orElseThrow(() -> new BadRequestException("Unknown line " + lr.lineId() + " (PLR_PLINES.KRC)."));
+            crewsByLine.put(line, crews);
+        }
+        return crewsByLine;
+    }
+
+    /** Turns a wrong rotation (not 4 crews, the same crew twice) into 400 Bad Request. */
+    private static <T> T generateRotation(Supplier<T> generator) {
+        try {
+            return generator.get();
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestException(e.getMessage());
+        }
     }
 
     private static void validate(SolveRequest r) {

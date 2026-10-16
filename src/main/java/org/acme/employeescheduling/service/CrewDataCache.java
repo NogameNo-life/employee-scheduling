@@ -1,17 +1,14 @@
 package org.acme.employeescheduling.service;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.context.control.ActivateRequestContext;
-import jakarta.enterprise.event.Observes;
 
-import io.quarkus.runtime.LaunchMode;
-import io.quarkus.runtime.StartupEvent;
-
+import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.entity.plr.PlrLines;
 import org.acme.employeescheduling.repository.CrewRepository;
@@ -21,8 +18,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Master data kept in memory: {@link CrewData} per department and all production lines.
- * Filled when the application starts (like LoadDataService in food-packaging-quarkus).
- * Call {@link #refresh()} after crews, roles or employees are changed in the DB.
+ * Filled when the application starts by {@link CrewRosterService} (like LoadDataService in
+ * food-packaging-quarkus). Call {@link #refresh()} after crews, roles or employees are changed in the DB.
  */
 @ApplicationScoped
 public class CrewDataCache {
@@ -42,15 +39,6 @@ public class CrewDataCache {
         this.loader = loader;
         this.crewRepository = crewRepository;
         this.lineRepository = lineRepository;
-    }
-
-    /** Observer calls go through the CDI proxy, so the request context (needed by Hibernate) is active. */
-    @ActivateRequestContext
-    void onStart(@Observes StartupEvent event) {
-        if (LaunchMode.current() == LaunchMode.TEST) {
-            return;
-        }
-        refresh();
     }
 
     public void refresh() {
@@ -76,5 +64,19 @@ public class CrewDataCache {
 
     public Optional<Line> getLine(String lineId) {
         return Optional.ofNullable(linesById.get(lineId.trim()));
+    }
+
+    /** All lines, sorted by code. */
+    public List<Line> getLines() {
+        return linesById.values().stream().sorted(Comparator.comparing(Line::getId)).toList();
+    }
+
+    /** Crews of all loaded departments, sorted by number. */
+    public List<Crew> getAllCrews() {
+        return dataByDepartment.values().stream()
+                .flatMap(data -> data.crews().stream())
+                .distinct()
+                .sorted(Comparator.comparing(Crew::getId))
+                .toList();
     }
 }

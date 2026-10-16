@@ -3,8 +3,11 @@ package org.acme.employeescheduling.service;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -12,6 +15,8 @@ import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.domain.ShiftType;
+import org.acme.employeescheduling.service.LineSchedule.LineDay;
+import org.apache.commons.lang3.tuple.Pair;
 
 /**
  * Generates the crew schedule (step 3 of the specification) with the
@@ -46,6 +51,9 @@ public class CrewRotationGenerator {
                     throw new IllegalArgumentException("Line " + line + " must have exactly "
                             + CYCLE_LENGTH + " crews, but has " + crews.size() + ".");
                 }
+                if (new HashSet<>(crews).size() != crews.size()) {
+                    throw new IllegalArgumentException("Line " + line + " has the same crew more than once.");
+                }
                 for (int k = 0; k < crews.size(); k++) {
                     int phase = Math.floorMod(dayIndex - k, CYCLE_LENGTH);
                     ShiftType type = switch (phase) {
@@ -61,6 +69,21 @@ public class CrewRotationGenerator {
                 }
             }
         }
+        return result;
+    }
+
+    /** Groups crew shifts into one pair (day crew, night crew) per line and date. */
+    public List<LineSchedule> toLineSchedules(List<CrewShift> crewShifts) {
+        Map<Line, TreeMap<LocalDate, Crew[]>> byLine = new LinkedHashMap<>();
+        for (CrewShift shift : crewShifts) {
+            Crew[] pair = byLine.computeIfAbsent(shift.getLine(), l -> new TreeMap<>())
+                    .computeIfAbsent(shift.getDate(), d -> new Crew[2]);
+            pair[shift.getType() == ShiftType.DAY ? 0 : 1] = shift.getCrew();
+        }
+        List<LineSchedule> result = new ArrayList<>();
+        byLine.forEach((line, days) -> result.add(new LineSchedule(line, days.entrySet().stream()
+                .map(e -> new LineDay(e.getKey(), Pair.of(e.getValue()[0], e.getValue()[1])))
+                .toList())));
         return result;
     }
 }
