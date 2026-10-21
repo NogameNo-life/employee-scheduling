@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.CrewSchedule;
@@ -19,14 +19,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Builds a new schedule version: the crew schedule (step 3) for one month plus empty positions for the solver.
+ * Builds a new schedule version: the crew schedule (step 3) for one month plus empty positions for the editor.
  *
  * <p>
  * There is no crew -> line table yet, so crews are given to lines at random:
  * all crews are shuffled and every line takes the next {@link CrewRotationGenerator#CYCLE_LENGTH}.
  * The shuffled order is also the rotation order.
  */
-@ApplicationScoped
+@Service
 public class CrewRosterService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CrewRosterService.class);

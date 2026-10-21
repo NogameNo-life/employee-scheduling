@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
@@ -16,10 +16,10 @@ import org.acme.employeescheduling.domain.Position;
 import org.acme.employeescheduling.domain.Role;
 
 /**
- * Builds the problem for the solver: one {@link Position} per seat,
+ * Builds a schedule version: one {@link Position} per seat,
  * based on the crew composition (PLR_RLBR).
  */
-@ApplicationScoped
+@Service
 public class CrewScheduleFactory {
 
     public CrewSchedule create(CrewData data, List<Line> lines, List<CrewShift> crewShifts) {
@@ -38,7 +38,7 @@ public class CrewScheduleFactory {
 
     /**
      * A separate version with the same crew shifts and the same assignments as {@code source}.
-     * New {@link Position} objects are created, because the solver changes the positions of the version it solves.
+     * New {@link Position} objects are created, because every version changes its own positions.
      */
     public CrewSchedule copyOf(CrewSchedule source, CrewData data) {
         CrewSchedule copy = create(data, source.getLines(), source.getCrewShifts());

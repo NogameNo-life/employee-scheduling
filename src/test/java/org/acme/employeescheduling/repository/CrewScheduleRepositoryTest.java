@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.List;
 
-import org.acme.employeescheduling.config.SessionHeaderFilter;
+import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.repository.CrewScheduleRepository.ScheduleVersion;
 import org.junit.jupiter.api.Test;
@@ -35,16 +35,16 @@ class CrewScheduleRepositoryTest {
     }
 
     @Test
-    void solverUpdatesOnlyTheVersionItStartedFrom() {
-        ScheduleVersion solving = repository.create("user1", schedule());
-        CrewSchedule bestSolution = schedule();
-        assertThat(repository.update("user1", solving.id(), bestSolution)).isTrue();
-        assertThat(repository.read("user1").schedule()).isSameAs(bestSolution);
-        assertThat(repository.read("user1").id()).isEqualTo(solving.id());
+    void updateChangesOnlyTheSameVersion() {
+        ScheduleVersion edited = repository.create("user1", schedule());
+        CrewSchedule changed = schedule();
+        assertThat(repository.update("user1", edited.id(), changed)).isTrue();
+        assertThat(repository.read("user1").schedule()).isSameAs(changed);
+        assertThat(repository.read("user1").id()).isEqualTo(edited.id());
 
-        // The user generates a new version while the solver is still running
+        // The user generates a new version, then a late change to the old version arrives
         ScheduleVersion generated = repository.create("user1", schedule());
-        assertThat(repository.update("user1", solving.id(), schedule())).isFalse();
+        assertThat(repository.update("user1", edited.id(), schedule())).isFalse();
         assertThat(repository.read("user1").schedule()).isSameAs(generated.schedule());
     }
 
@@ -61,13 +61,13 @@ class CrewScheduleRepositoryTest {
 
     @Test
     void cleanupKeepsTheDefaultVersion() {
-        repository.create(SessionHeaderFilter.DEFAULT_SESSION_ID, schedule());
+        repository.create(SessionHeader.DEFAULT_SESSION_ID, schedule());
         repository.create("user1", schedule());
 
         repository.cleanupOldSessions();
 
         // Both were used just now, so nothing is removed; the default is never removed
-        assertThat(repository.read(SessionHeaderFilter.DEFAULT_SESSION_ID)).isNotNull();
+        assertThat(repository.read(SessionHeader.DEFAULT_SESSION_ID)).isNotNull();
         assertThat(repository.read("user1")).isNotNull();
     }
 

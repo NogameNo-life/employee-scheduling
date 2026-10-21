@@ -1,6 +1,5 @@
 package org.acme.employeescheduling.entity.tabu;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.Entity;
 import lombok.Getter;
 import lombok.Setter;
@@ -13,7 +12,7 @@ import jakarta.persistence.*;
 @Getter
 @Setter
 @Table(name = "BD_CARD", schema = "dbo")
-public class BdCrd extends PanacheEntityBase {
+public class BdCrd {
 
     @Column(name = "BRID")
     public Integer crewId;

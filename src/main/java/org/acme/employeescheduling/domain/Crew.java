@@ -5,20 +5,18 @@ import java.util.List;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
-import ai.timefold.solver.core.api.domain.lookup.PlanningId;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/** Crew / brigade (PLR_BR.BRID). Problem fact. */
+/** Crew / brigade (PLR_BR.BRID). */
 @Getter
 @Setter
 @NoArgsConstructor
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Crew {
 
-    @PlanningId
     @EqualsAndHashCode.Include
     private Integer id;
 

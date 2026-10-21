@@ -1,6 +1,5 @@
 package org.acme.employeescheduling.entity.plr;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -21,7 +20,7 @@ import java.io.Serializable;
 @Setter
 @Table(name = "PLR_RLTB", schema = "dbo")
 @IdClass(PlrRltb.Key.class)
-public class PlrRltb extends PanacheEntityBase {
+public class PlrRltb {
 
     @Id
     @Column(name = "TABN")

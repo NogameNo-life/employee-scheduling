@@ -4,23 +4,18 @@ import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
 
-import ai.timefold.solver.core.api.domain.lookup.PlanningId;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/**
- * Employee (BD_CARD.TABN). Problem fact and the value the solver assigns to a
- * {@link Position}.
- */
+/** Employee (BD_CARD.TABN). Can be assigned to a {@link Position}. */
 @Getter
 @Setter
 @NoArgsConstructor
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Employee {
 
-    @PlanningId
     @EqualsAndHashCode.Include
     private Integer id;
 

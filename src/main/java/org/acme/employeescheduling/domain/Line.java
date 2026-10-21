@@ -1,20 +1,17 @@
 package org.acme.employeescheduling.domain;
 
-import ai.timefold.solver.core.api.domain.lookup.PlanningId;
-
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/** Production line. Problem fact. */
+/** Production line. */
 @Getter
 @Setter
 @NoArgsConstructor
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Line {
 
-    @PlanningId
     @EqualsAndHashCode.Include
     private String id;
 

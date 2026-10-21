@@ -3,7 +3,6 @@ package org.acme.employeescheduling.domain;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-import ai.timefold.solver.core.api.domain.lookup.PlanningId;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -11,7 +10,7 @@ import lombok.Setter;
 
 /**
  * "Crew X works on line Y, on date Z, day or night shift".
- * Comes from the crew schedule (generated or entered manually). Problem fact.
+ * Comes from the crew schedule (generated or entered manually).
  */
 @Getter
 @Setter
@@ -19,7 +18,6 @@ import lombok.Setter;
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class CrewShift {
 
-    @PlanningId
     @EqualsAndHashCode.Include
     private String id;
 

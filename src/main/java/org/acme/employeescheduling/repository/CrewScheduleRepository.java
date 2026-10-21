@@ -4,22 +4,20 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
-import jakarta.enterprise.context.ApplicationScoped;
-
-import io.quarkus.scheduler.Scheduled;
-
-import org.acme.employeescheduling.config.SessionHeaderFilter;
+import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
 
 /**
  * Schedule versions kept in memory, one per user session (X-Session-Id).
  * Same idea as PackagingScheduleRepository in food-packaging-quarkus.
  *
  * <p>
- * Every new version (startup, "Generate", copy of the default) gets a new version id. The solver only
- * updates the version it started from, so a late best solution never overwrites a newer version.
+ * Every new version (startup, "Generate", copy of the default) gets a new version id. {@link #update} only
+ * changes the version it was given, so a late change never overwrites a newer version.
  */
-@ApplicationScoped
+@Component
 public class CrewScheduleRepository {
 
     private static final long MAX_IDLE_MILLIS = 24 * 60 * 60 * 1000L;
@@ -61,10 +59,10 @@ public class CrewScheduleRepository {
     }
 
     /** Removes versions nobody has used for 24 hours. The default version is always kept. */
-    @Scheduled(every = "1h")
+    @Scheduled(fixedRate = 60 * 60 * 1000L)
     public void cleanupOldSessions() {
         long cutoff = System.currentTimeMillis() - MAX_IDLE_MILLIS;
-        sessionSchedules.entrySet().removeIf(entry -> !SessionHeaderFilter.DEFAULT_SESSION_ID.equals(entry.getKey())
+        sessionSchedules.entrySet().removeIf(entry -> !SessionHeader.DEFAULT_SESSION_ID.equals(entry.getKey())
                 && entry.getValue().lastUpdated < cutoff);
     }
 

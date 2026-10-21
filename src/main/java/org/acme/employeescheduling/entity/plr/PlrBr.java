@@ -1,6 +1,5 @@
 package org.acme.employeescheduling.entity.plr;
 
-import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -15,7 +14,7 @@ import lombok.Setter;
 @Getter
 @Setter
 @Table(name = "PLR_BR", schema = "dbo")
-public class PlrBr extends PanacheEntityBase {
+public class PlrBr {
 
     /** Crew number, referenced by BD_CARD.BRID and PLR_RLBR.BRID. */
     @Id

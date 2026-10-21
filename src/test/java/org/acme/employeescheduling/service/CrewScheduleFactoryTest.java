@@ -44,7 +44,7 @@ class CrewScheduleFactoryTest {
         assertThat(copied.isPinned()).isTrue();
         assertThat(copy.getPositions().get(1).getEmployee()).isNull();
 
-        // Changing the copy (e.g. by the solver) does not change the source
+        // Changing the copy (e.g. in the editor) does not change the source
         copied.setEmployee(null);
         assertThat(source.getPositions().get(0).getEmployee()).isEqualTo(anna);
     }

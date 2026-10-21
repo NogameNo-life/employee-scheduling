@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.CrewShift;
@@ -34,7 +34,7 @@ import org.apache.commons.lang3.tuple.Pair;
  * Keep {@code anchorDate} fixed (e.g. the date the rotation started) so the
  * pattern continues correctly from one month to the next.
  */
-@ApplicationScoped
+@Service
 public class CrewRotationGenerator {
 
     /** Day, Night, Sleep day, Day off. */

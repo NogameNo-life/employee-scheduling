@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Employee;
@@ -20,11 +20,11 @@ import org.acme.employeescheduling.entity.plr.PlrRlbr;
 import org.acme.employeescheduling.entity.plr.PlrRltb;
 import org.acme.employeescheduling.entity.plr.PlrRole;
 import org.acme.employeescheduling.entity.tabu.BdCrd;
-import org.acme.employeescheduling.repository.CrewCompositionRepository;
-import org.acme.employeescheduling.repository.CrewRepository;
-import org.acme.employeescheduling.repository.EmployeeRepository;
-import org.acme.employeescheduling.repository.EmployeeRoleRepository;
-import org.acme.employeescheduling.repository.RoleRepository;
+import org.acme.employeescheduling.repository.plr.CrewCompositionRepository;
+import org.acme.employeescheduling.repository.plr.CrewRepository;
+import org.acme.employeescheduling.repository.tabu.EmployeeRepository;
+import org.acme.employeescheduling.repository.plr.EmployeeRoleRepository;
+import org.acme.employeescheduling.repository.plr.RoleRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,7 +39,7 @@ import org.slf4j.LoggerFactory;
  * Employees (BD_CARD: name and crew) are in another database (tabu2), so they are joined
  * with the other tables in memory only.
  */
-@ApplicationScoped
+@Service
 public class CrewDataLoader {
 
         private static final Logger LOGGER = LoggerFactory.getLogger(CrewDataLoader.class);

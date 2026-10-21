@@ -8,14 +8,14 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.entity.plr.PlrLines;
-import org.acme.employeescheduling.repository.CrewRepository;
-import org.acme.employeescheduling.repository.LineRepository;
+import org.acme.employeescheduling.repository.plr.CrewRepository;
+import org.acme.employeescheduling.repository.plr.LineRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
  * Filled when the application starts by {@link CrewRosterService} (like LoadDataService in
  * food-packaging-quarkus). Call {@link #refresh()} after crews, roles or employees are changed in the DB.
  */
-@ApplicationScoped
+@Service
 public class CrewDataCache {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CrewDataCache.class);

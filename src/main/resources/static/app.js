@@ -1,7 +1,5 @@
-var autoRefreshIntervalId = null;
 // Every browser tab is one user with its own schedule version (same key as production-automation-portal-react)
 const sessionId = getSessionId();
-let loadedSchedule = null;
 
 const DAY_SHIFT_START = JSJoda.LocalTime.of(8, 0);
 const NIGHT_SHIFT_START = JSJoda.LocalTime.of(20, 0);
@@ -33,22 +31,11 @@ var byEmployeeTimeline = new vis.Timeline(byEmployeePanel, byEmployeeItemDataSet
   byEmployeeTimelineOptions);
 
 $(document).ready(function () {
-  replaceTimefoldAutoHeaderFooter();
-
   $("#generateButton").click(function () {
     generate();
   });
   $("#refreshButton").click(function () {
     refreshSchedule();
-  });
-  $("#solveButton").click(function () {
-    solve();
-  });
-  $("#stopSolvingButton").click(function () {
-    stopSolving();
-  });
-  $("#analyzeButton").click(function () {
-    analyze();
   });
   // HACK to allow vis-timeline to work within Bootstrap tabs
   $("#byLineTab").on('shown.bs.tab', function (event) {
@@ -59,7 +46,6 @@ $(document).ready(function () {
   })
 
   setupAjax();
-  refreshSolvingButtons(false);
   refreshSchedule();
 });
 
@@ -95,24 +81,20 @@ function setupAjax() {
 function refreshSchedule() {
   $.getJSON("/crew-schedules/rotation", function (roster) {
     renderRoster(roster);
-    refreshSolution();
+    refreshPositions();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Getting the crew schedule failed.", xhr);
   });
 }
 
-// Employees assigned by the solver (after "Solve")
-function refreshSolution() {
+// Employees assigned to the positions of the crew shifts
+function refreshPositions() {
   $.getJSON("/crew-schedules", function (schedule) {
-    loadedSchedule = schedule;
-    refreshSolvingButtons(schedule.solverStatus != null && schedule.solverStatus !== "NOT_SOLVING");
-    $("#score").text("Score: " + (schedule.score == null ? "?" : schedule.score));
     const unassigned = schedule.positions.filter(position => position.employee == null).length;
     $("#unassignedPositions").text(`Unassigned positions: ${unassigned} / ${schedule.positions.length}`);
     renderEmployees(schedule);
   }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Getting the solution failed.", xhr);
-    refreshSolvingButtons(false);
+    showError("Getting the positions failed.", xhr);
   });
 }
 
@@ -120,7 +102,7 @@ function generate() {
   const month = $("#monthInput").val();
   $.post("/crew-schedules/init?date=" + (month ? month + "-01" : ""), function (roster) {
     renderRoster(roster);
-    refreshSolution();
+    refreshPositions();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Generating the crew schedule failed.", xhr);
   });
@@ -172,7 +154,7 @@ function setWindow(roster) {
   byEmployeeTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
 }
 
-// Gantt chart of the solution: one row per employee, one bar per assigned position
+// Gantt chart of the assignments: one row per employee, one bar per assigned position
 function renderEmployees(schedule) {
   byEmployeeGroupDataSet.clear();
   byEmployeeItemDataSet.clear();
@@ -204,124 +186,6 @@ function renderEmployees(schedule) {
   });
 }
 
-function solve() {
-  $.post("/crew-schedules/solve", function () {
-    refreshSolvingButtons(true);
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Start solving failed.", xhr);
-  });
-}
-
-function analyze() {
-  new bootstrap.Modal("#scoreAnalysisModal").show()
-  const scoreAnalysisModalContent = $("#scoreAnalysisModalContent");
-  scoreAnalysisModalContent.children().remove();
-  if (loadedSchedule == null || loadedSchedule.score == null || loadedSchedule.score.indexOf('init') != -1) {
-    scoreAnalysisModalContent.text("No score to analyze yet, please first press the 'solve' button.");
-  } else {
-    $('#scoreAnalysisScoreLabel').text(`(${loadedSchedule.score})`);
-    $.getJSON("/crew-schedules/analyze", function (scoreAnalysis) {
-      let constraints = scoreAnalysis.constraints;
-      constraints.sort((a, b) => {
-        let aComponents = getScoreComponents(a.score), bComponents = getScoreComponents(b.score);
-        if (aComponents.hard < 0 && bComponents.hard > 0) return -1;
-        if (aComponents.hard > 0 && bComponents.soft < 0) return 1;
-        if (Math.abs(aComponents.hard) > Math.abs(bComponents.hard)) {
-          return -1;
-        } else {
-          if (aComponents.medium < 0 && bComponents.medium > 0) return -1;
-          if (aComponents.medium > 0 && bComponents.medium < 0) return 1;
-          if (Math.abs(aComponents.medium) > Math.abs(bComponents.medium)) {
-            return -1;
-          } else {
-            if (aComponents.soft < 0 && bComponents.soft > 0) return -1;
-            if (aComponents.soft > 0 && bComponents.soft < 0) return 1;
-
-            return Math.abs(bComponents.soft) - Math.abs(aComponents.soft);
-          }
-        }
-      });
-      constraints.map((e) => {
-        let components = getScoreComponents(e.weight);
-        e.type = components.hard != 0 ? 'hard' : (components.medium != 0 ? 'medium' : 'soft');
-        e.weight = components[e.type];
-        let scores = getScoreComponents(e.score);
-        e.implicitScore = scores.hard != 0 ? scores.hard : (scores.medium != 0 ? scores.medium : scores.soft);
-      });
-      scoreAnalysis.constraints = constraints;
-
-      scoreAnalysisModalContent.children().remove();
-      scoreAnalysisModalContent.text("");
-
-      const analysisTable = $(`<table class="table"/>`).css({textAlign: 'center'});
-      const analysisTHead = $(`<thead/>`).append($(`<tr/>`)
-          .append($(`<th></th>`))
-          .append($(`<th>Constraint</th>`).css({textAlign: 'left'}))
-          .append($(`<th>Type</th>`))
-          .append($(`<th># Matches</th>`))
-          .append($(`<th>Weight</th>`))
-          .append($(`<th>Score</th>`))
-          .append($(`<th></th>`)));
-      analysisTable.append(analysisTHead);
-      const analysisTBody = $(`<tbody/>`)
-      $.each(scoreAnalysis.constraints, (index, constraintAnalysis) => {
-        let icon = constraintAnalysis.type == "hard" && constraintAnalysis.implicitScore < 0 ? '<span class="fas fa-exclamation-triangle" style="color: red"></span>' : '';
-        if (!icon) icon = constraintAnalysis.matches.length == 0 ? '<span class="fas fa-check-circle" style="color: green"></span>' : '';
-
-        let row = $(`<tr/>`);
-        row.append($(`<td/>`).html(icon))
-            .append($(`<td/>`).text(constraintAnalysis.name).css({textAlign: 'left'}))
-            .append($(`<td/>`).text(constraintAnalysis.type))
-            .append($(`<td/>`).html(`<b>${constraintAnalysis.matches.length}</b>`))
-            .append($(`<td/>`).text(constraintAnalysis.weight))
-            .append($(`<td/>`).text(constraintAnalysis.implicitScore));
-        analysisTBody.append(row);
-        row.append($(`<td/>`));
-      });
-      analysisTable.append(analysisTBody);
-      scoreAnalysisModalContent.append(analysisTable);
-    }).fail(function (xhr, ajaxOptions, thrownError) {
-      showError("Analyze failed.", xhr);
-    });
-  }
-}
-
-function getScoreComponents(score) {
-  let components = {hard: 0, medium: 0, soft: 0};
-
-  $.each([...score.matchAll(/(-?[0-9]+)(hard|medium|soft)/g)], (i, parts) => {
-    components[parts[2]] = parseInt(parts[1], 10);
-  });
-
-  return components;
-}
-
-function refreshSolvingButtons(solving) {
-  if (solving) {
-    $("#solveButton").hide();
-    $("#stopSolvingButton").show();
-    if (autoRefreshIntervalId == null) {
-      autoRefreshIntervalId = setInterval(refreshSolution, 2000);
-    }
-  } else {
-    $("#solveButton").show();
-    $("#stopSolvingButton").hide();
-    if (autoRefreshIntervalId != null) {
-      clearInterval(autoRefreshIntervalId);
-      autoRefreshIntervalId = null;
-    }
-  }
-}
-
-function stopSolving() {
-  $.post("/crew-schedules/stopSolving", function () {
-    refreshSolvingButtons(false);
-    refreshSolution();
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Stop solving failed.", xhr);
-  });
-}
-
 function getSessionId() {
   let id = null;
   try {
@@ -334,4 +198,44 @@ function getSessionId() {
     // No sessionStorage (e.g. blocked): the server uses the default version
   }
   return id ?? "";
+}
+
+// Notifications (Bootstrap toasts in #notificationPanel)
+function showSimpleError(title) {
+  showNotification(title, null);
+}
+
+function showError(title, xhr) {
+  let detail = null;
+  if (xhr != null) {
+    const body = xhr.responseJSON;
+    detail = body != null && body.message ? body.message : (xhr.responseText || xhr.statusText || null);
+  }
+  showNotification(title, detail);
+}
+
+function showNotification(title, detail) {
+  console.error(title + (detail ? "\n" + detail : ""));
+  const toast = $(`<div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="30000"/>`)
+    .append($(`<div class="toast-header bg-danger"/>`)
+      .append($(`<strong class="me-auto text-dark"/>`).text("Error"))
+      .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"/>`)))
+    .append($(`<div class="toast-body"/>`)
+      .append($(`<p/>`).text(title))
+      .append(detail ? $(`<pre class="mb-0 small"/>`).text(detail) : null));
+  $("#notificationPanel").append(toast);
+  toast.on("hidden.bs.toast", () => toast.remove());
+  new bootstrap.Toast(toast[0]).show();
+}
+
+// The same key always gets the same color (e.g. one color per crew)
+const COLORS = ["#8AE234", "#FCAF3E", "#729FCF", "#E9B96E", "#AD7FA8", "#FCE94F", "#EF2929", "#73D216",
+  "#F57900", "#3465A4", "#C17D11", "#75507B", "#EDD400", "#CC0000", "#4E9A06"];
+const colorByKey = new Map();
+
+function pickColor(key) {
+  if (!colorByKey.has(key)) {
+    colorByKey.set(key, COLORS[colorByKey.size % COLORS.length]);
+  }
+  return colorByKey.get(key);
 }

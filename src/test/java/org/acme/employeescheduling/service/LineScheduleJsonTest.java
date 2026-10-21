@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 
 class LineScheduleJsonTest {
 
-    /** Same settings as the Quarkus ObjectMapper: ISO dates. */
+    /** Same settings as the Spring Boot ObjectMapper: ISO dates. */
     private final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule())
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
