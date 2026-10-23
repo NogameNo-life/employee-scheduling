@@ -4,16 +4,20 @@ import java.time.Clock;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
+import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +79,30 @@ public class CrewRosterService {
     }
 
     /**
+     * Crews of a version for the crew list in the frontend, sorted by number: the lines the crew works on
+     * in this version and all its employees, sorted by name.
+     */
+    public List<CrewDetails> toCrewDetails(CrewSchedule schedule) {
+        Map<Integer, Set<Line>> linesByCrew = new LinkedHashMap<>();
+        for (CrewShift crewShift : schedule.getCrewShifts()) {
+            linesByCrew.computeIfAbsent(crewShift.getCrew().getId(), id -> new LinkedHashSet<>())
+                    .add(crewShift.getLine());
+        }
+        Map<Integer, List<Employee>> employeesByCrew = new LinkedHashMap<>();
+        for (Employee employee : schedule.getEmployees()) {
+            employeesByCrew.computeIfAbsent(employee.getCrew().getId(), id -> new ArrayList<>()).add(employee);
+        }
+        return schedule.getCrews().stream()
+                .sorted(Comparator.comparing(Crew::getId))
+                .map(crew -> new CrewDetails(crew,
+                        List.copyOf(linesByCrew.getOrDefault(crew.getId(), Set.of())),
+                        employeesByCrew.getOrDefault(crew.getId(), List.of()).stream()
+                                .sorted(Comparator.comparing(Employee::getFullName).thenComparing(Employee::getId))
+                                .toList()))
+                .toList();
+    }
+
+    /**
      * Shuffles the crews and deals them out to the lines one by one (round-robin), so every line gets crews
      * and, while there are no more crews than lines, every crew works on a different line.
      * A line gets at most {@link CrewRotationGenerator#CYCLE_LENGTH} crews; crews left over get no line.
@@ -110,5 +138,12 @@ public class CrewRosterService {
      * @param lines day crew and night crew for every line and day
      */
     public record Rotation(YearMonth month, List<LineSchedule> lines) {
+    }
+
+    /**
+     * @param lines     lines the crew works on in the version (empty: the crew got no line)
+     * @param employees employees of the crew (PLR_TBBR); each one also has {@code crew}
+     */
+    public record CrewDetails(Crew crew, List<Line> lines, List<Employee> employees) {
     }
 }

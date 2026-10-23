@@ -43,6 +43,12 @@ public class CrewScheduleSessionService {
     @EventListener(ApplicationReadyEvent.class)
     void onStart() {
         try {
+            // Lines first and on their own: the frontend shows them even if the schedule cannot be generated
+            crewDataCache.refreshLines();
+        } catch (RuntimeException e) {
+            LOGGER.error("Could not load the lines at startup.", e);
+        }
+        try {
             init(SessionHeader.DEFAULT_SESSION_ID, YearMonth.now(clock));
         } catch (RuntimeException e) {
             // Keep the application running (e.g. the DB is not reachable); POST /crew-schedules/init retries.

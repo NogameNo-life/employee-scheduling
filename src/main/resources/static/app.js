@@ -44,6 +44,9 @@ $(document).ready(function () {
   $("#byEmployeeTab").on('shown.bs.tab', function (event) {
     byEmployeeTimeline.redraw();
   })
+  // Click on a shift: open its crew in the crew list
+  byLineTimeline.on("click", props => openCrewOfItem(byLineItemDataSet, props.item));
+  byEmployeeTimeline.on("click", props => openCrewOfItem(byEmployeeItemDataSet, props.item));
 
   setupAjax();
   refreshSchedule();
@@ -82,8 +85,34 @@ function refreshSchedule() {
   $.getJSON("/crew-schedules/rotation", function (roster) {
     renderRoster(roster);
     refreshPositions();
+    refreshCrews();
   }).fail(function (xhr, ajaxOptions, thrownError) {
+    if (xhr.status === 404) {
+      // No version yet (e.g. the crews could not be loaded at startup): show at least the lines
+      refreshLines();
+    }
     showError("Getting the crew schedule failed.", xhr);
+  });
+}
+
+// Lines without a crew schedule: empty timeline rows
+function refreshLines() {
+  $.getJSON("/crew-schedules/lines", function (lines) {
+    byLineGroupDataSet.clear();
+    byLineItemDataSet.clear();
+    renderLineGroups(lines);
+    renderCrews([]);
+  }).fail(function (xhr, ajaxOptions, thrownError) {
+    showError("Getting the lines failed.", xhr);
+  });
+}
+
+// Crews of the version with all their employees, shown below the timeline
+function refreshCrews() {
+  $.getJSON("/crew-schedules/crews", function (crews) {
+    renderCrews(crews);
+  }).fail(function (xhr, ajaxOptions, thrownError) {
+    showError("Getting the crews failed.", xhr);
   });
 }
 
@@ -103,6 +132,7 @@ function generate() {
   $.post("/crew-schedules/init?month=" + month, function (roster) {
     renderRoster(roster);
     refreshPositions();
+    refreshCrews();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Generating the crew schedule failed.", xhr);
   });
@@ -119,9 +149,9 @@ function renderRoster(roster) {
     return;
   }
 
+  renderLineGroups(roster.lines.map(lineSchedule => lineSchedule.line));
   $.each(roster.lines, (index, lineSchedule) => {
     const line = lineSchedule.line;
-    byLineGroupDataSet.add({id: line.id, order: index, content: $(`<div/>`).append($(`<h5 class="card-title mb-1"/>`).text(line.name)).html()});
     $.each(lineSchedule.days, (i, day) => {
       const date = JSJoda.LocalDate.parse(day.date);
       addCrewShiftItem(line, day.dayCrew, date.atTime(DAY_SHIFT_START), date.atTime(NIGHT_SHIFT_START));
@@ -131,16 +161,22 @@ function renderRoster(roster) {
   setWindow(roster);
 }
 
+// One timeline row per line, in the given order
+function renderLineGroups(lines) {
+  $.each(lines, (index, line) => {
+    byLineGroupDataSet.add({id: line.id, order: index, content: $(`<div/>`).append($(`<h5 class="card-title mb-1"/>`).text(line.name)).html()});
+  });
+}
+
 function addCrewShiftItem(line, crew, start, end) {
   if (crew == null) {
     return;
   }
-  const crewName = crew.name == null ? String(crew.id) : crew.name.trim();
   const element = $(`<div class="card-body p-2"/>`)
-    .append($(`<h5 class="card-title mb-1"/>`).text(crewName))
+    .append($(`<h5 class="card-title mb-1"/>`).text(crewName(crew)))
     .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${start.format(timeFormat)} - ${end.format(timeFormat)}`));
   byLineItemDataSet.add({
-    id: `${line.id}_${start}`, group: line.id,
+    id: `${line.id}_${start}`, group: line.id, crewId: crew.id,
     content: element.html(),
     start: start.toString(), end: end.toString(),
     style: "background-color: " + pickColor("crew" + crew.id)
@@ -180,12 +216,76 @@ function renderEmployees(schedule) {
       .append($(`<h5 class="card-title mb-1"/>`).text(position.role.name))
       .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${crewShift.line.name}, ${crewShift.crew.name}`));
     byEmployeeItemDataSet.add({
-      id: position.id, group: position.employee.id,
+      id: position.id, group: position.employee.id, crewId: crewShift.crew.id,
       content: element.html(),
       start: crewShift.start, end: crewShift.end,
       style: "background-color: " + pickColor("crew" + crewShift.crew.id)
     });
   });
+}
+
+// Crew list: one accordion item per crew; the body lists all employees of the crew
+function renderCrews(crews) {
+  const crewList = $("#crewList").empty();
+  const employeeCount = crews.reduce((sum, details) => sum + details.employees.length, 0);
+  $("#crewCount").text(crews.length === 0 ? "" : `(${crews.length} crews, ${employeeCount} employees)`);
+  if (crews.length === 0) {
+    crewList.append($(`<p class="text-muted"/>`).text("No crews."));
+    return;
+  }
+
+  $.each(crews, (index, details) => {
+    const crew = details.crew;
+    const bodyId = `crew-${crew.id}`;
+    const lineNames = details.lines.length === 0 ? "no line" : details.lines.map(line => line.name).join(", ");
+    const header = $(`<button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse"/>`)
+      .attr("data-bs-target", "#" + bodyId)
+      .append($(`<span class="crew-color me-2"/>`).css("background-color", pickColor("crew" + crew.id)))
+      .append($(`<strong class="me-3"/>`).text(crewName(crew)))
+      .append($(`<span class="me-3"/>`).text(lineNames))
+      .append($(`<span class="text-muted"/>`)
+        .text(`${details.employees.length} employees, ${crew.staffCount} per shift`));
+
+    const rows = details.employees.map((employee, i) => $(`<tr/>`)
+      .append($(`<td/>`).text(i + 1))
+      .append($(`<td/>`).text(employee.id))
+      .append($(`<td/>`).text(employee.fullName))
+      .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", "))));
+    const body = details.employees.length === 0
+      ? $(`<p class="text-muted mb-0"/>`).text("No employees.")
+      : $(`<table class="table table-sm table-striped mb-0"/>`)
+        .append($(`<thead/>`).append($(`<tr/>`)
+          .append($(`<th style="width: 3rem"/>`).text("#"))
+          .append($(`<th style="width: 10rem"/>`).text("Personnel number"))
+          .append($(`<th/>`).text("Full name"))
+          .append($(`<th/>`).text("Roles"))))
+        .append($(`<tbody/>`).append(rows));
+
+    crewList.append($(`<div class="accordion-item"/>`)
+      .append($(`<h3 class="accordion-header"/>`).append(header))
+      .append($(`<div class="accordion-collapse collapse"/>`).attr("id", bodyId)
+        .append($(`<div class="accordion-body py-2"/>`).append(body))));
+  });
+}
+
+function openCrewOfItem(itemDataSet, itemId) {
+  const item = itemId == null ? null : itemDataSet.get(itemId);
+  if (item != null && item.crewId != null) {
+    openCrew(item.crewId);
+  }
+}
+
+function openCrew(crewId) {
+  const element = document.getElementById(`crew-${crewId}`);
+  if (element == null) {
+    return;
+  }
+  bootstrap.Collapse.getOrCreateInstance(element, {toggle: false}).show();
+  element.closest(".accordion-item").scrollIntoView({behavior: "smooth", block: "start"});
+}
+
+function crewName(crew) {
+  return crew.name == null ? String(crew.id) : crew.name.trim();
 }
 
 function getSessionId() {

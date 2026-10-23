@@ -2,13 +2,21 @@ package org.acme.employeescheduling.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Clock;
+import java.time.LocalDate;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.stream.IntStream;
 
 import org.acme.employeescheduling.domain.Crew;
+import org.acme.employeescheduling.domain.CrewSchedule;
+import org.acme.employeescheduling.domain.CrewShift;
+import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.ShiftType;
+import org.acme.employeescheduling.service.CrewRosterService.CrewDetails;
 import org.junit.jupiter.api.Test;
 
 class CrewRosterServiceTest {
@@ -54,6 +62,31 @@ class CrewRosterServiceTest {
 
         assertThat(CrewRosterService.assignCrewsToLines(LINES, crews, new Random(1)))
                 .isNotEqualTo(CrewRosterService.assignCrewsToLines(LINES, crews, new Random(2)));
+    }
+
+    @Test
+    void crewDetailsHaveLinesAndEmployeesSortedByName() {
+        Crew crew1 = new Crew(1, "Cr1");
+        Crew crew2 = new Crew(2, "Cr2");
+        Line line = LINES.get(0);
+        LocalDate date = LocalDate.of(2026, 11, 1);
+        List<CrewShift> crewShifts = List.of(
+                new CrewShift("s1", date, ShiftType.DAY, line, crew1),
+                new CrewShift("s2", date, ShiftType.NIGHT, line, crew1));
+        List<Employee> employees = List.of(
+                new Employee(10, "Petrov", crew1, new HashSet<>()),
+                new Employee(11, "Ivanov", crew1, new HashSet<>()),
+                new Employee(20, "Sidorov", crew2, new HashSet<>()));
+        CrewSchedule schedule = new CrewSchedule(LINES, List.of(crew2, crew1), employees, crewShifts, List.of());
+        CrewRosterService service = new CrewRosterService(null, null, null, Clock.systemUTC());
+
+        List<CrewDetails> details = service.toCrewDetails(schedule);
+
+        assertThat(details).extracting(CrewDetails::crew).containsExactly(crew1, crew2);
+        assertThat(details.get(0).lines()).containsExactly(line);
+        assertThat(details.get(0).employees()).extracting(Employee::getFullName).containsExactly("Ivanov", "Petrov");
+        assertThat(details.get(1).lines()).isEmpty();
+        assertThat(details.get(1).employees()).extracting(Employee::getFullName).containsExactly("Sidorov");
     }
 
     private static List<Crew> used(Map<Line, List<Crew>> crewsByLine) {

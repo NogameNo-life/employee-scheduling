@@ -7,9 +7,12 @@ import java.util.List;
 
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
+import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.exception.ScheduleException;
 import org.acme.employeescheduling.repository.CrewScheduleRepository.ScheduleVersion;
+import org.acme.employeescheduling.service.CrewDataCache;
 import org.acme.employeescheduling.service.CrewRosterService;
+import org.acme.employeescheduling.service.CrewRosterService.CrewDetails;
 import org.acme.employeescheduling.service.CrewRosterService.Rotation;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
@@ -33,12 +36,14 @@ public class CrewScheduleController {
 
     private final CrewScheduleSessionService sessionService;
     private final CrewRosterService rosterService;
+    private final CrewDataCache crewDataCache;
     private final Clock clock;
 
     public CrewScheduleController(CrewScheduleSessionService sessionService, CrewRosterService rosterService,
-            Clock clock) {
+            CrewDataCache crewDataCache, Clock clock) {
         this.sessionService = sessionService;
         this.rosterService = rosterService;
+        this.crewDataCache = crewDataCache;
         this.clock = clock;
     }
 
@@ -57,6 +62,22 @@ public class CrewScheduleController {
     public RotationResponse rotation(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
         return toResponse(sessionId, sessionService.requireVersion(sessionId));
+    }
+
+    /**
+     * All active lines (loaded at startup), sorted by name. Also works when there is no version yet,
+     * so the frontend can show the lines before the first "Generate".
+     */
+    @GetMapping("/lines")
+    public List<Line> lines() {
+        return crewDataCache.getLines();
+    }
+
+    /** Crews of the caller's version with their lines and all their employees. */
+    @GetMapping("/crews")
+    public List<CrewDetails> crews(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
+        return rosterService.toCrewDetails(sessionService.requireVersion(sessionId).schedule());
     }
 
     /**

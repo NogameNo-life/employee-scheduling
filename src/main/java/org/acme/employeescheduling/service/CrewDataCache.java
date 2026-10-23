@@ -45,21 +45,34 @@ public class CrewDataCache {
         this.lineRepository = lineRepository;
     }
 
+    /** Reloads lines and crew data. */
     public void refresh() {
+        refreshLines();
+        refreshCrews();
+    }
+
+    /**
+     * Reloads the lines only. Called at startup on its own, so the frontend can show the lines
+     * even when the crews cannot be loaded.
+     */
+    public void refreshLines() {
         ConcurrentHashMap<String, Line> lines = new ConcurrentHashMap<>();
         for (PlrLines row : lineRepository.findActive()) {
             String id = row.lineId.trim();
             lines.putIfAbsent(id, new Line(id, row.lineName.trim()));
         }
         linesById = lines;
+        LOGGER.info("Loaded {} lines.", lines.size());
+    }
 
+    private void refreshCrews() {
         List<String> departments = crewRepository.findDepartments().stream().map(String::trim).distinct().toList();
         ConcurrentMap<String, CrewData> data = new ConcurrentHashMap<>();
         for (String department : departments) {
             data.put(department, loader.load(department));
         }
         dataByDepartment = data;
-        LOGGER.info("Loaded {} lines and crew data for departments {}.", lines.size(), departments);
+        LOGGER.info("Loaded crew data for departments {}.", departments);
     }
 
     /** Data for one department. A department that was not loaded at startup is loaded now. */

@@ -14,6 +14,8 @@
     .vis-time-axis .vis-grid.vis-sunday {
       background: #D3D7CFFF;
     }
+    .vis-item { cursor: pointer; }
+    .crew-color { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; }
   </style>
 </head>
 
@@ -58,6 +60,10 @@
       <div id="employeeVisualization"></div>
     </div>
   </div>
+
+  <h2 class="h4">Crews <span id="crewCount" class="text-muted fs-6"></span></h2>
+  <p class="text-muted small mb-2">Click a crew (here or in the timeline) to see all its employees.</p>
+  <div class="accordion mb-4" id="crewList"></div>
 </div>
 
 <script src="/webjars/jquery/jquery.min.js"></script>
