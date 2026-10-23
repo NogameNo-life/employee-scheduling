@@ -6,7 +6,7 @@ import jakarta.persistence.EntityManagerFactory;
 
 import com.zaxxer.hikari.HikariDataSource;
 
-import org.acme.employeescheduling.entity.tabu.BdCrd;
+import org.acme.employeescheduling.entity.tabu.BdCard;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.jdbc.DataSourceBuilder;
@@ -37,7 +37,7 @@ public class TabuDataSourceConfig {
     @Bean
     public LocalContainerEntityManagerFactoryBean tabuEntityManagerFactory(EntityManagerFactoryBuilder builder,
             @Qualifier("tabuDataSource") DataSource dataSource) {
-        return builder.dataSource(dataSource).packages(BdCrd.class).persistenceUnit("tabu").build();
+        return builder.dataSource(dataSource).packages(BdCard.class).persistenceUnit("tabu").build();
     }
 
     @Bean

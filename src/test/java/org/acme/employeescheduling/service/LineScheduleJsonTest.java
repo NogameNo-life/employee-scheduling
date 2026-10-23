@@ -28,6 +28,6 @@ class LineScheduleJsonTest {
 
         assertThat(mapper.writeValueAsString(schedule)).isEqualTo("""
                 {"line":{"id":"L1","name":"Line 1"},"days":[{"date":"2026-11-01",\
-                "dayCrew":{"id":1,"name":"Cr1"},"nightCrew":{"id":2,"name":"Cr2"}}]}""");
+                "dayCrew":{"id":1,"name":"Cr1","staffCount":0},"nightCrew":{"id":2,"name":"Cr2","staffCount":0}}]}""");
     }
 }

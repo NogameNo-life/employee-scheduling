@@ -1,6 +1,7 @@
 package org.acme.employeescheduling.service;
 
-import java.time.LocalDate;
+import java.time.Clock;
+import java.time.YearMonth;
 
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
@@ -28,28 +29,30 @@ public class CrewScheduleSessionService {
     private final CrewRosterService rosterService;
     private final CrewScheduleFactory scheduleFactory;
     private final CrewDataCache crewDataCache;
+    private final Clock clock;
 
     public CrewScheduleSessionService(CrewScheduleRepository repository, CrewRosterService rosterService,
-            CrewScheduleFactory scheduleFactory, CrewDataCache crewDataCache) {
+            CrewScheduleFactory scheduleFactory, CrewDataCache crewDataCache, Clock clock) {
         this.repository = repository;
         this.rosterService = rosterService;
         this.scheduleFactory = scheduleFactory;
         this.crewDataCache = crewDataCache;
+        this.clock = clock;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     void onStart() {
         try {
-            init(SessionHeader.DEFAULT_SESSION_ID, LocalDate.now());
+            init(SessionHeader.DEFAULT_SESSION_ID, YearMonth.now(clock));
         } catch (RuntimeException e) {
             // Keep the application running (e.g. the DB is not reachable); POST /crew-schedules/init retries.
             LOGGER.error("Could not generate the default schedule version at startup.", e);
         }
     }
 
-    /** Generates a new version for the month of {@code date} and makes it the version of the session. */
-    public ScheduleVersion init(String sessionId, LocalDate date) {
-        CrewSchedule schedule = rosterService.createVersion(date);
+    /** Generates a new version for {@code month} and makes it the version of the session. */
+    public ScheduleVersion init(String sessionId, YearMonth month) {
+        CrewSchedule schedule = rosterService.createVersion(month);
         ScheduleVersion version = repository.create(sessionId, schedule);
         LOGGER.info("Session {}: new schedule version {}.", sessionId, version.id());
         return version;

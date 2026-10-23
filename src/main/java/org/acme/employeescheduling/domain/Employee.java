@@ -21,7 +21,7 @@ public class Employee {
 
     private String fullName;
 
-    /** The crew this employee belongs to. */
+    /** The crew this employee belongs to (PLR_TBBR). */
     private Crew crew;
 
     /** Roles this employee can perform (PLR_RLTB). */

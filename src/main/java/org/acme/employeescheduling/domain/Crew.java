@@ -22,8 +22,11 @@ public class Crew {
 
     private String name;
 
+    /** People needed in this crew per shift: the sum of PLR_RLBR.NPERS over all roles of the crew. */
+    private int staffCount;
+
     /**
-     * Employees of this crew (BD_CARD.BRID). Not in the JSON: a crew is repeated in every position,
+     * Employees of this crew (PLR_TBBR). Not in the JSON: a crew is repeated in every position,
      * so the list would be sent thousands of times. Every employee has {@code crew} instead.
      */
     @JsonIgnore

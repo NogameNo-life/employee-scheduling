@@ -100,7 +100,7 @@ function refreshPositions() {
 
 function generate() {
   const month = $("#monthInput").val();
-  $.post("/crew-schedules/init?date=" + (month ? month + "-01" : ""), function (roster) {
+  $.post("/crew-schedules/init?month=" + month, function (roster) {
     renderRoster(roster);
     refreshPositions();
   }).fail(function (xhr, ajaxOptions, thrownError) {
@@ -147,9 +147,11 @@ function addCrewShiftItem(line, crew, start, end) {
   });
 }
 
-// Shows the first week of the month; scroll or zoom to see the rest
+// Shows one week from today (or from the 1st, if today is not in the month); scroll or zoom to see the rest
 function setWindow(roster) {
-  const firstDay = JSJoda.YearMonth.parse(roster.month).atDay(1);
+  const month = JSJoda.YearMonth.parse(roster.month);
+  const today = JSJoda.LocalDate.now();
+  const firstDay = JSJoda.YearMonth.from(today).equals(month) ? today : month.atDay(1);
   byLineTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
   byEmployeeTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
 }

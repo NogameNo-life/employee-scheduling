@@ -1,6 +1,6 @@
 package org.acme.employeescheduling.service;
 
-import java.time.LocalDate;
+import java.time.Clock;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -34,25 +34,26 @@ public class CrewRosterService {
     private final CrewDataCache crewDataCache;
     private final CrewRotationGenerator rotationGenerator;
     private final CrewScheduleFactory scheduleFactory;
+    private final Clock clock;
     private final Random random = new Random();
 
     public CrewRosterService(CrewDataCache crewDataCache, CrewRotationGenerator rotationGenerator,
-            CrewScheduleFactory scheduleFactory) {
+            CrewScheduleFactory scheduleFactory, Clock clock) {
         this.crewDataCache = crewDataCache;
         this.rotationGenerator = rotationGenerator;
         this.scheduleFactory = scheduleFactory;
+        this.clock = clock;
     }
 
     /**
      * Reloads crews and lines from the DB, gives crews to lines at random
-     * and generates the schedule for the month of {@code date}.
+     * and generates the schedule for {@code month}.
      */
-    public CrewSchedule createVersion(LocalDate date) {
+    public CrewSchedule createVersion(YearMonth month) {
         crewDataCache.refresh();
         Map<Line, List<Crew>> crewsByLine = assignCrewsToLines(crewDataCache.getLines(),
                 crewDataCache.getAllCrews(), random);
 
-        YearMonth month = YearMonth.from(date);
         // The rotation starts on the first day of the month, because the crews are new every time.
         List<CrewShift> crewShifts = rotationGenerator.generate(month.atDay(1), month.atEndOfMonth(),
                 month.atDay(1), crewsByLine);
@@ -63,7 +64,7 @@ public class CrewRosterService {
     /** The crew schedule of a version, grouped by line and day for the frontend. */
     public Rotation toRotation(CrewSchedule schedule) {
         List<CrewShift> crewShifts = schedule.getCrewShifts();
-        YearMonth month = crewShifts.isEmpty() ? YearMonth.now() : YearMonth.from(crewShifts.get(0).getDate());
+        YearMonth month = crewShifts.isEmpty() ? YearMonth.now(clock) : YearMonth.from(crewShifts.get(0).getDate());
         Map<Line, LineSchedule> byLine = new LinkedHashMap<>();
         rotationGenerator.toLineSchedules(crewShifts).forEach(lineSchedule -> byLine.put(lineSchedule.line(), lineSchedule));
         // Every line of the version, also the ones without crews (not enough crews), so the frontend shows them all

@@ -2,7 +2,7 @@ package org.acme.employeescheduling.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import org.acme.employeescheduling.entity.tabu.BdCrd;
+import org.acme.employeescheduling.entity.tabu.BdCard;
 import org.junit.jupiter.api.Test;
 
 class CrewDataLoaderTest {
@@ -19,8 +19,8 @@ class CrewDataLoaderTest {
         assertThat(CrewDataLoader.fullName(row(1234, null))).isEqualTo("1234");
     }
 
-    private static BdCrd row(int employeeId, String fullName) {
-        BdCrd row = new BdCrd();
+    private static BdCard row(int employeeId, String fullName) {
+        BdCard row = new BdCard();
         row.employeeId = employeeId;
         row.fullName = fullName;
         return row;

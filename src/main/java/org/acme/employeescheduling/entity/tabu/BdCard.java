@@ -12,17 +12,14 @@ import jakarta.persistence.*;
 @Getter
 @Setter
 @Table(name = "BD_CARD", schema = "dbo")
-public class BdCrd {
-
-    @Column(name = "BRID")
-    public Integer crewId;
-
-    @Column(name = "FIO")
-    public String fullName;
+public class BdCard {
 
     @Id
     @Column(name = "TABN")
     public Integer employeeId;
+
+    @Column(name = "FIO")
+    public String fullName;
 
     @Column(name = "OBJ")
     public String department;

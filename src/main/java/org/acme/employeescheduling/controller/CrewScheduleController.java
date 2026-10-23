@@ -1,6 +1,6 @@
 package org.acme.employeescheduling.controller;
 
-import java.time.LocalDate;
+import java.time.Clock;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -22,8 +22,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Every endpoint works with the schedule version of the caller (X-Session-Id header,
- * {@value SessionHeader#DEFAULT_SESSION_ID} when missing or empty), like food-packaging-quarkus.
+ * Every endpoint works with the schedule version of the caller (X-Session-Id
+ * header,
+ * {@value SessionHeader#DEFAULT_SESSION_ID} when missing or empty), like
+ * food-packaging-quarkus.
  */
 @RestController
 @RequestMapping("/crew-schedules")
@@ -31,10 +33,13 @@ public class CrewScheduleController {
 
     private final CrewScheduleSessionService sessionService;
     private final CrewRosterService rosterService;
+    private final Clock clock;
 
-    public CrewScheduleController(CrewScheduleSessionService sessionService, CrewRosterService rosterService) {
+    public CrewScheduleController(CrewScheduleSessionService sessionService, CrewRosterService rosterService,
+            Clock clock) {
         this.sessionService = sessionService;
         this.rosterService = rosterService;
+        this.clock = clock;
     }
 
     /** The whole version: positions with assigned employees. */
@@ -44,7 +49,10 @@ public class CrewScheduleController {
         return sessionService.requireVersion(sessionId).schedule();
     }
 
-    /** The crew schedule of the version: day crew and night crew for every line and day. */
+    /**
+     * The crew schedule of the version: day crew and night crew for every line and
+     * day.
+     */
     @GetMapping("/rotation")
     public RotationResponse rotation(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
@@ -52,20 +60,22 @@ public class CrewScheduleController {
     }
 
     /**
-     * Reloads data from the DB, gives crews to lines at random and makes a new version for the month of
-     * {@code date} (yyyy-MM-dd, default: today). Only the caller's version is replaced.
+     * Reloads data from the DB, gives crews to lines at random and makes a new
+     * version for
+     * {@code month} (yyyy-MM, default: the current month). Only the caller's
+     * version is replaced.
      */
     @PostMapping("/init")
     public RotationResponse init(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @RequestParam(required = false) String date) {
-        LocalDate day;
+            @RequestParam(required = false) String month) {
+        YearMonth yearMonth;
         try {
-            day = date == null || date.isBlank() ? LocalDate.now() : LocalDate.parse(date);
+            yearMonth = month == null || month.isBlank() ? YearMonth.now(clock) : YearMonth.parse(month);
         } catch (DateTimeParseException e) {
-            throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, "date must be yyyy-MM-dd, got: " + date);
+            throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, "month must be yyyy-MM, got: " + month);
         }
-        return toResponse(sessionId, sessionService.init(sessionId, day));
+        return toResponse(sessionId, sessionService.init(sessionId, yearMonth));
     }
 
     private RotationResponse toResponse(String sessionId, ScheduleVersion version) {
