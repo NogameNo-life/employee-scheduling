@@ -2,7 +2,6 @@ package org.acme.employeescheduling.service;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -13,6 +12,7 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
+import org.acme.employeescheduling.domain.CrewComposition;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
@@ -71,35 +71,40 @@ public class CrewScheduleEditor {
     }
 
     /**
-     * Sets how many people of {@code roleId} the crew needs per shift (0 removes the role from the crew),
-     * and updates the positions of all its crew shifts (pinned ones too). Positions that still exist keep
-     * their employee.
+     * Sets how many people of {@code roleId} the crew needs per shift from {@code validFrom} (null: the first day
+     * of the month) until the next composition version; 0 removes the role. Only the crew shifts in that period
+     * get other positions (pinned ones too); positions that still exist keep their employee.
      */
-    public void setRoleCount(CrewSchedule schedule, int crewId, int roleId, int count) {
+    public void setRoleCount(CrewSchedule schedule, int crewId, int roleId, int count, LocalDate validFrom) {
         if (count < 0) {
             throw new IllegalArgumentException("The number of people must be 0 or more, got: " + count);
         }
         Crew crew = findCrew(schedule, crewId);
         Role role = find(schedule.getRoles(), r -> r.getId().equals(roleId), "Role " + roleId);
-
-        Map<Role, Integer> rolesNeeded = schedule.getComposition().computeIfAbsent(crewId, id -> new HashMap<>());
-        if (count == 0) {
-            rolesNeeded.remove(role);
-        } else {
-            rolesNeeded.put(role, count);
+        LocalDate from = validFrom == null ? schedule.getMonth().atDay(1) : validFrom;
+        if (!YearMonth.from(from).equals(schedule.getMonth())) {
+            throw new IllegalArgumentException("Date " + from + " is not in " + schedule.getMonth() + ".");
         }
-        crew.setStaffCount(rolesNeeded.values().stream().mapToInt(Integer::intValue).sum());
 
-        Map<String, Position> existing = schedule.getPositions().stream()
-                .filter(position -> position.getCrew().equals(crew))
-                .collect(Collectors.toMap(Position::getId, Function.identity()));
-        List<Position> updated = schedule.getCrewShifts().stream()
-                .filter(crewShift -> crewShift.getCrew().equals(crew))
-                .flatMap(crewShift -> scheduleFactory.createPositions(crewShift, rolesNeeded).stream())
-                .map(position -> existing.getOrDefault(position.getId(), position))
-                .toList();
-        schedule.getPositions().removeIf(position -> position.getCrew().equals(crew));
-        schedule.getPositions().addAll(updated);
+        schedule.getComposition().computeIfAbsent(crewId, id -> new CrewComposition()).setRoleCount(from, role, count);
+        updatePositions(schedule, crew);
+    }
+
+    /**
+     * Removes the composition version of the crew from {@code validFrom}: from that date on, the previous version
+     * is valid again. The version from the first day of the month (from the DB) cannot be removed.
+     */
+    public void removeCompositionVersion(CrewSchedule schedule, int crewId, LocalDate validFrom) {
+        Crew crew = findCrew(schedule, crewId);
+        if (schedule.getMonth().atDay(1).equals(validFrom)) {
+            throw new IllegalStateException("The composition from the first day of the month cannot be removed;"
+                    + " change its numbers instead.");
+        }
+        CrewComposition composition = schedule.getComposition().get(crewId);
+        if (composition == null || !composition.removeVersion(validFrom)) {
+            throw new NoSuchElementException("Crew " + crew + " has no composition from " + validFrom + ".");
+        }
+        updatePositions(schedule, crew);
     }
 
     /**
@@ -162,8 +167,35 @@ public class CrewScheduleEditor {
 
     private void add(CrewSchedule schedule, CrewShift crewShift) {
         schedule.getCrewShifts().add(crewShift);
-        schedule.getPositions().addAll(scheduleFactory.createPositions(crewShift,
-                schedule.getComposition().getOrDefault(crewShift.getCrew().getId(), Map.of())));
+        schedule.getPositions().addAll(scheduleFactory.createPositions(crewShift, rolesNeeded(schedule, crewShift)));
+    }
+
+    /** The composition valid on the date of the crew shift. */
+    private static Map<Role, Integer> rolesNeeded(CrewSchedule schedule, CrewShift crewShift) {
+        CrewComposition composition = schedule.getComposition().get(crewShift.getCrew().getId());
+        return composition == null ? Map.of() : composition.rolesNeededOn(crewShift.getDate());
+    }
+
+    /**
+     * After a composition change: {@link Crew#getStaffCount()} (first day of the month) and the positions of the
+     * crew's shifts, each from the composition valid on its date. Positions that still exist (same id) are kept
+     * with their employee, so crew shifts outside the changed period do not change.
+     */
+    private void updatePositions(CrewSchedule schedule, Crew crew) {
+        CrewComposition composition = schedule.getComposition().get(crew.getId());
+        crew.setStaffCount(composition == null ? 0 : composition.staffCountOn(schedule.getMonth().atDay(1)));
+
+        Map<String, Position> existing = schedule.getPositions().stream()
+                .filter(position -> position.getCrew().equals(crew))
+                .collect(Collectors.toMap(Position::getId, Function.identity()));
+        List<Position> updated = schedule.getCrewShifts().stream()
+                .filter(crewShift -> crewShift.getCrew().equals(crew))
+                .flatMap(crewShift -> scheduleFactory.createPositions(crewShift, rolesNeeded(schedule, crewShift))
+                        .stream())
+                .map(position -> existing.getOrDefault(position.getId(), position))
+                .toList();
+        schedule.getPositions().removeIf(position -> position.getCrew().equals(crew));
+        schedule.getPositions().addAll(updated);
     }
 
     private void remove(CrewSchedule schedule, CrewShift crewShift) {

@@ -1,5 +1,6 @@
 package org.acme.employeescheduling.service;
 
+import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -12,6 +13,7 @@ import java.util.Set;
 import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
+import org.acme.employeescheduling.domain.CrewComposition;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
@@ -59,7 +61,8 @@ public class CrewRosterService {
 
     /**
      * Crews of a version for the crew list in the frontend, sorted by number: the lines the crew works on
-     * in this version, its composition (sorted by role name) and all its employees, sorted by name.
+     * in this version, its composition versions (by date, roles sorted by name) and all its employees, sorted by
+     * name.
      */
     public List<CrewDetails> toCrewDetails(CrewSchedule schedule) {
         Map<Integer, Set<Line>> linesByCrew = new LinkedHashMap<>();
@@ -75,13 +78,24 @@ public class CrewRosterService {
                 .sorted(Comparator.comparing(Crew::getId))
                 .map(crew -> new CrewDetails(crew,
                         List.copyOf(linesByCrew.getOrDefault(crew.getId(), Set.of())),
-                        schedule.getComposition().getOrDefault(crew.getId(), Map.of()).entrySet().stream()
+                        compositionVersions(schedule.getComposition().get(crew.getId())),
+                        employeesByCrew.getOrDefault(crew.getId(), List.of()).stream()
+                                .sorted(Comparator.comparing(Employee::getFullName).thenComparing(Employee::getId))
+                                .toList()))
+                .toList();
+    }
+
+    private static List<CompositionVersion> compositionVersions(CrewComposition composition) {
+        if (composition == null) {
+            return List.of();
+        }
+        return composition.getVersions().entrySet().stream()
+                .map(version -> new CompositionVersion(version.getKey(),
+                        version.getValue().values().stream().mapToInt(Integer::intValue).sum(),
+                        version.getValue().entrySet().stream()
                                 .map(entry -> new RoleCount(entry.getKey(), entry.getValue()))
                                 .sorted(Comparator.comparing((RoleCount roleCount) -> roleCount.role().getName())
                                         .thenComparing(roleCount -> roleCount.role().getId()))
-                                .toList(),
-                        employeesByCrew.getOrDefault(crew.getId(), List.of()).stream()
-                                .sorted(Comparator.comparing(Employee::getFullName).thenComparing(Employee::getId))
                                 .toList()))
                 .toList();
     }
@@ -101,10 +115,18 @@ public class CrewRosterService {
 
     /**
      * @param lines     lines the crew works on in the version (empty: the crew has no crew shifts)
-     * @param roles     people needed per shift for each role (PLR_RLBR, changed in the version)
-     * @param employees employees of the crew (PLR_TBBR, changed in the version); each one also has {@code crew}
+     * @param composition people needed per shift for each role (PLR_RLBR, changed in the version), by date
+     * @param employees   employees of the crew (PLR_TBBR, changed in the version); each one also has {@code crew}
      */
-    public record CrewDetails(Crew crew, List<Line> lines, List<RoleCount> roles, List<Employee> employees) {
+    public record CrewDetails(Crew crew, List<Line> lines, List<CompositionVersion> composition,
+            List<Employee> employees) {
+    }
+
+    /**
+     * @param validFrom  the version is valid from this date until the next version
+     * @param staffCount people per shift, all roles together
+     */
+    public record CompositionVersion(LocalDate validFrom, int staffCount, List<RoleCount> roles) {
     }
 
     public record RoleCount(Role role, int count) {

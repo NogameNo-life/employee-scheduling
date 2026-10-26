@@ -450,7 +450,7 @@ function renderCrews(crews) {
       .append($(`<strong class="me-3"/>`).text(crewName(crew)))
       .append($(`<span class="me-3"/>`).text(lineNames))
       .append($(`<span class="text-muted"/>`)
-        .text(`${details.employees.length} employees, ${crew.staffCount} per shift`));
+        .text(`${details.employees.length} employees, ${staffCounts(details)} per shift`));
 
     const body = $(`<div class="accordion-body py-2"/>`)
       .append($(`<h4 class="h6"/>`).text("People per shift"))
@@ -465,34 +465,73 @@ function renderCrews(crews) {
   });
 }
 
-// Roles of the crew with the number of people per shift (0 removes the role), and a row to add a role
+// People per shift of every composition version, e.g. "3" or "3 -> 5" when it changes during the month
+function staffCounts(details) {
+  return details.composition.length === 0 ? "0" : details.composition.map(version => version.staffCount).join(" \u2192 ");
+}
+
+// Composition versions of the crew: each one is valid from its date until the next one, so a change from a date
+// does not change the crew shifts before it. Numbers can be changed in place (0 removes the role); the last row
+// sets a role from a date (and makes a new version there if needed).
 function renderComposition(details) {
   const crew = details.crew;
-  const rows = details.roles.map(roleCount => $(`<tr/>`)
-    .append($(`<td/>`).text(roleCount.role.name))
-    .append($(`<td/>`).append($(`<input type="number" min="0" step="1" class="form-control form-control-sm role-count"/>`)
-      .val(roleCount.count)
-      .on("change", event => setRoleCount(crew.id, roleCount.role.id, $(event.target).val())))));
+  const versions = details.composition;
+  const firstDay = shownMonth == null ? null : JSJoda.YearMonth.parse(shownMonth).atDay(1);
+  const lastDay = shownMonth == null ? null : JSJoda.YearMonth.parse(shownMonth).atEndOfMonth();
+  const result = $(`<div/>`);
+  if (versions.length === 0) {
+    result.append($(`<p class="text-muted mb-1"/>`).text("No roles: this crew needs nobody."));
+  }
 
-  const usedRoleIds = new Set(details.roles.map(roleCount => roleCount.role.id));
-  const freeRoles = allRoles.filter(role => !usedRoleIds.has(role.id));
+  $.each(versions, (index, version) => {
+    const next = versions[index + 1];
+    const until = next == null ? "end of month" : JSJoda.LocalDate.parse(next.validFrom).minusDays(1).toString();
+    const title = $(`<div class="small fw-bold mt-2"/>`)
+      .text(`From ${version.validFrom} until ${until}: ${version.staffCount} per shift`);
+    if (firstDay == null || version.validFrom !== firstDay.toString()) {
+      title.append($(`<button type="button" class="btn btn-sm btn-link text-danger py-0" title="Remove this version"/>`)
+        .append($(`<span class="fas fa-times"/>`))
+        .on("click", () => removeCompositionVersion(crew.id, version.validFrom)));
+    }
+    const rows = version.roles.map(roleCount => $(`<tr/>`)
+      .append($(`<td/>`).text(roleCount.role.name))
+      .append($(`<td/>`).append($(`<input type="number" min="0" step="1" class="form-control form-control-sm role-count"/>`)
+        .val(roleCount.count)
+        .on("change", event => setRoleCount(crew.id, roleCount.role.id, $(event.target).val(), version.validFrom)))));
+    const table = rows.length === 0
+      ? $(`<p class="text-muted mb-0 small"/>`).text("No roles.")
+      : $(`<table class="table table-sm mb-0 w-auto"/>`)
+        .append($(`<thead/>`).append($(`<tr/>`)
+          .append($(`<th/>`).text("Role"))
+          .append($(`<th/>`).text("People"))))
+        .append($(`<tbody/>`).append(rows));
+    result.append(title, table);
+  });
+
   const roleSelect = $(`<select class="form-select form-select-sm d-inline-block w-auto me-2"/>`)
-    .append(freeRoles.map(role => $(`<option/>`).val(role.id).text(role.name)));
-  const countInput = $(`<input type="number" min="1" step="1" class="form-control form-control-sm d-inline-block role-count me-2"/>`)
+    .append(allRoles.map(role => $(`<option/>`).val(role.id).text(role.name)));
+  const countInput = $(`<input type="number" min="0" step="1" class="form-control form-control-sm d-inline-block role-count me-2"/>`)
     .val(1);
-  const addButton = $(`<button type="button" class="btn btn-sm btn-outline-secondary"/>`)
-    .append($(`<span class="fas fa-plus"/>`)).append(" Add role")
-    .on("click", () => setRoleCount(crew.id, parseInt(roleSelect.val()), countInput.val()));
-  const addRow = freeRoles.length === 0 ? null : $(`<div class="mt-1"/>`).append(roleSelect, countInput, addButton);
-
-  const table = rows.length === 0
-    ? $(`<p class="text-muted mb-0"/>`).text("No roles: this crew needs nobody.")
-    : $(`<table class="table table-sm mb-0 w-auto"/>`)
-      .append($(`<thead/>`).append($(`<tr/>`)
-        .append($(`<th/>`).text("Role"))
-        .append($(`<th/>`).text("People"))))
-      .append($(`<tbody/>`).append(rows));
-  return $(`<div/>`).append(table, addRow);
+  const dateInput = $(`<input type="date" class="form-control form-control-sm d-inline-block w-auto me-2"/>`)
+    .attr("min", firstDay == null ? null : firstDay.toString())
+    .attr("max", lastDay == null ? null : lastDay.toString())
+    .val(firstDay == null ? "" : firstDay.toString());
+  const saveButton = $(`<button type="button" class="btn btn-sm btn-outline-secondary"/>`)
+    .append($(`<span class="fas fa-plus"/>`)).append(" Set from date")
+    .on("click", () => {
+      if (!dateInput.val()) {
+        showSimpleError("Choose the date the composition is valid from.");
+        return;
+      }
+      setRoleCount(crew.id, parseInt(roleSelect.val()), countInput.val(), dateInput.val());
+    });
+  if (allRoles.length > 0) {
+    result.append($(`<div class="mt-2"/>`)
+      .append($(`<span class="small me-2"/>`).text("Role"), roleSelect,
+        $(`<span class="small me-2"/>`).text("people"), countInput,
+        $(`<span class="small me-2"/>`).text("from"), dateInput, saveButton));
+  }
+  return result;
 }
 
 // Employees of the crew; the crew column moves an employee to another crew
@@ -522,14 +561,15 @@ function renderCrewEmployees(details) {
     .append($(`<tbody/>`).append(rows));
 }
 
-function setRoleCount(crewId, roleId, value) {
+// From validFrom (yyyy-MM-dd) until the next composition version of the crew
+function setRoleCount(crewId, roleId, value, validFrom) {
   const count = Number(value);
   if (isNaN(roleId) || value === "" || !Number.isInteger(count) || count < 0) {
     showSimpleError("The number of people must be a whole number, 0 or more.");
     renderCrews(crewDetailsList);
     return;
   }
-  send("PUT", `/crew-schedules/crews/${crewId}/roles/${roleId}`, {count: count})
+  send("PUT", `/crew-schedules/crews/${crewId}/roles/${roleId}`, {count: count, validFrom: validFrom})
     .done(crews => {
       renderCrews(crews);
       refreshPositions();
@@ -538,6 +578,19 @@ function setRoleCount(crewId, roleId, value) {
       showError("Changing the crew composition failed.", xhr);
       renderCrews(crewDetailsList);
     });
+}
+
+// From its date on, the previous version is valid again
+function removeCompositionVersion(crewId, validFrom) {
+  if (!confirm(`Remove the composition from ${validFrom}? From this date the previous composition is used again.`)) {
+    return;
+  }
+  send("DELETE", `/crew-schedules/crews/${crewId}/composition/${validFrom}`)
+    .done(crews => {
+      renderCrews(crews);
+      refreshPositions();
+    })
+    .fail(xhr => showError("Removing the composition failed.", xhr));
 }
 
 function moveEmployee(employeeId, crewId) {

@@ -45,10 +45,12 @@ class CrewScheduleFactoryTest {
         Employee copiedAnna = copiedCrew.getEmployees().get(0);
         assertThat(copiedAnna).isNotSameAs(anna).isSameAs(schedule.getEmployees().get(0));
         assertThat(copiedAnna.getCrew()).isSameAs(copiedCrew);
-        assertThat(schedule.getComposition()).isEqualTo(data.composition());
+        // The composition from the DB is valid from the first day of the month
+        assertThat(schedule.getComposition().get(1).getVersions()).containsOnlyKeys(MONTH.atDay(1));
+        assertThat(schedule.getComposition().get(1).rolesNeededOn(MONTH.atEndOfMonth())).containsEntry(role, 2);
 
         // Changing the version does not change the master data
-        schedule.getComposition().get(1).put(role, 5);
+        schedule.getComposition().get(1).setRoleCount(MONTH.atDay(1), role, 5);
         copiedAnna.setCrew(null);
         assertThat(data.composition().get(1)).containsEntry(role, 2);
         assertThat(anna.getCrew()).isSameAs(crew);

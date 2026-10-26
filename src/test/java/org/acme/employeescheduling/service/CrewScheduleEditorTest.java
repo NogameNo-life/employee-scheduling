@@ -135,21 +135,52 @@ class CrewScheduleEditorTest {
         Position kept = schedule.getPositions().get(0);
         kept.setEmployee(employee(100));
 
-        editor.setRoleCount(schedule, 1, operator.getId(), 1);
+        editor.setRoleCount(schedule, 1, operator.getId(), 1, null);
 
         assertThat(crew(1).getStaffCount()).isEqualTo(3);
         assertThat(positionsOfCrew(1)).hasSize(3).contains(kept);
         assertThat(kept.getEmployee()).isEqualTo(employee(100));
         assertThat(positionsOfCrew(2)).hasSize(1);
 
-        editor.setRoleCount(schedule, 1, packer.getId(), 0);
+        editor.setRoleCount(schedule, 1, packer.getId(), 0, null);
 
         assertThat(crew(1).getStaffCount()).isEqualTo(1);
         assertThat(positionsOfCrew(1)).extracting(Position::getRole).containsExactly(operator);
-        assertThatThrownBy(() -> editor.setRoleCount(schedule, 1, packer.getId(), -1))
+        assertThatThrownBy(() -> editor.setRoleCount(schedule, 1, packer.getId(), -1, null))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> editor.setRoleCount(schedule, 1, 99, 1))
+        assertThatThrownBy(() -> editor.setRoleCount(schedule, 1, 99, 1, null))
                 .isInstanceOf(NoSuchElementException.class);
+    }
+
+    @Test
+    void compositionFromADateChangesOnlyTheCrewShiftsFromThatDate() {
+        LocalDate day15 = DAY1.plusDays(14);
+        editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+        editor.addCrewShift(schedule, request(day15, ShiftType.DAY, "L1", 1));
+        Position early = positionsOn(DAY1).get(0);
+        early.setEmployee(employee(100));
+
+        editor.setRoleCount(schedule, 1, packer.getId(), 4, day15);
+
+        assertThat(positionsOn(DAY1)).hasSize(2).contains(early);
+        assertThat(early.getEmployee()).isEqualTo(employee(100));
+        assertThat(positionsOn(day15)).hasSize(4);
+        assertThat(crew(1).getStaffCount()).as("first day of the month").isEqualTo(2);
+        // A crew shift added later gets the composition valid on its date
+        editor.addCrewShift(schedule, request(day15.plusDays(1), ShiftType.NIGHT, "L1", 1));
+        assertThat(positionsOn(day15.plusDays(1))).hasSize(4);
+
+        editor.removeCompositionVersion(schedule, 1, day15);
+
+        assertThat(positionsOn(day15)).hasSize(2);
+        assertThat(positionsOn(day15.plusDays(1))).hasSize(2);
+        assertThat(positionsOn(DAY1)).contains(early);
+        assertThatThrownBy(() -> editor.removeCompositionVersion(schedule, 1, DAY1))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> editor.removeCompositionVersion(schedule, 1, day15))
+                .isInstanceOf(NoSuchElementException.class);
+        assertThatThrownBy(() -> editor.setRoleCount(schedule, 1, packer.getId(), 1, DAY1.minusDays(1)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -179,6 +210,10 @@ class CrewScheduleEditorTest {
 
     private Employee employee(int id) {
         return schedule.getEmployees().stream().filter(e -> e.getId() == id).findFirst().orElseThrow();
+    }
+
+    private List<Position> positionsOn(LocalDate date) {
+        return schedule.getPositions().stream().filter(p -> p.getDate().equals(date)).toList();
     }
 
     private List<Position> positionsOfCrew(int crewId) {

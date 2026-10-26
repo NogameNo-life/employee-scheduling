@@ -109,8 +109,20 @@ class CrewScheduleControllerTest {
         mvc.perform(json(put("/crew-schedules/crews/1/roles/10"), "{\"count\": 3}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].crew.staffCount").value(3))
-                .andExpect(jsonPath("$[0].roles[0].role.name").value("Packer"))
-                .andExpect(jsonPath("$[0].roles[0].count").value(3));
+                .andExpect(jsonPath("$[0].composition", hasSize(1)))
+                .andExpect(jsonPath("$[0].composition[0].validFrom").value("2026-11-01"))
+                .andExpect(jsonPath("$[0].composition[0].roles[0].role.name").value("Packer"))
+                .andExpect(jsonPath("$[0].composition[0].roles[0].count").value(3));
+
+        mvc.perform(json(put("/crew-schedules/crews/1/roles/10"), "{\"count\": 5, \"validFrom\": \"2026-11-15\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].crew.staffCount").value(3))
+                .andExpect(jsonPath("$[0].composition[1].validFrom").value("2026-11-15"))
+                .andExpect(jsonPath("$[0].composition[1].staffCount").value(5));
+        mvc.perform(delete("/crew-schedules/crews/1/composition/2026-11-15"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].composition", hasSize(1)));
+        mvc.perform(delete("/crew-schedules/crews/1/composition/2026-11-01")).andExpect(status().isConflict());
 
         mvc.perform(json(put("/crew-schedules/employees/100/crew"), "{\"crewId\": 2}"))
                 .andExpect(status().isOk())

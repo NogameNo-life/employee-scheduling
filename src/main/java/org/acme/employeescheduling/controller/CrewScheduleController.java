@@ -1,6 +1,7 @@
 package org.acme.employeescheduling.controller;
 
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -19,6 +20,7 @@ import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -150,13 +152,26 @@ public class CrewScheduleController {
                 schedule -> editor.setPinned(schedule, crewShiftId, request.pinned())));
     }
 
-    /** Sets how many people of a role the crew needs per shift; 0 removes the role from the crew. */
+    /**
+     * Sets how many people of a role the crew needs per shift from {@code validFrom} (default: the first day of
+     * the month) until the next composition version; 0 removes the role. Earlier crew shifts do not change.
+     */
     @PutMapping("/crews/{crewId}/roles/{roleId}")
     public List<CrewDetails> setRoleCount(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
             @PathVariable int crewId, @PathVariable int roleId, @RequestBody RoleCountRequest request) {
         ScheduleVersion version = sessionService.edit(sessionId,
-                schedule -> editor.setRoleCount(schedule, crewId, roleId, request.count()));
+                schedule -> editor.setRoleCount(schedule, crewId, roleId, request.count(), request.validFrom()));
+        return rosterService.toCrewDetails(version.schedule());
+    }
+
+    /** Removes a composition version of the crew: from its date on, the previous version is valid again. */
+    @DeleteMapping("/crews/{crewId}/composition/{validFrom}")
+    public List<CrewDetails> removeCompositionVersion(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @PathVariable int crewId, @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate validFrom) {
+        ScheduleVersion version = sessionService.edit(sessionId,
+                schedule -> editor.removeCompositionVersion(schedule, crewId, validFrom));
         return rosterService.toCrewDetails(version.schedule());
     }
 
@@ -184,7 +199,7 @@ public class CrewScheduleController {
     public record PinnedRequest(boolean pinned) {
     }
 
-    public record RoleCountRequest(int count) {
+    public record RoleCountRequest(int count, LocalDate validFrom) {
     }
 
     public record EmployeeCrewRequest(Integer crewId) {

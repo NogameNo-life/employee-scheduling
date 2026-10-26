@@ -33,11 +33,11 @@ public class CrewSchedule {
     private List<Employee> employees;
 
     /**
-     * Crew id -> role -> people needed per shift (PLR_RLBR). Not in the JSON: Jackson would write the
-     * Role keys as strings; {@code GET /crew-schedules/crews} has it per crew.
+     * Crew id -> composition versions (PLR_RLBR from the first day of the month, then the user's changes).
+     * Not in the JSON: {@code GET /crew-schedules/crews} has it per crew.
      */
     @JsonIgnore
-    private Map<Integer, Map<Role, Integer>> composition;
+    private Map<Integer, CrewComposition> composition;
 
     private List<CrewShift> crewShifts;
 
@@ -45,7 +45,7 @@ public class CrewSchedule {
     private List<Position> positions;
 
     public CrewSchedule(YearMonth month, List<Line> lines, List<Crew> crews, List<Role> roles,
-            List<Employee> employees, Map<Integer, Map<Role, Integer>> composition, List<CrewShift> crewShifts,
+            List<Employee> employees, Map<Integer, CrewComposition> composition, List<CrewShift> crewShifts,
             List<Position> positions) {
         this.month = month;
         this.lines = lines;
