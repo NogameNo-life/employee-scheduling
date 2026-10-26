@@ -1,4 +1,4 @@
-name: Java CI with Maven (Quarkus)
+name: Java CI with Maven
 
 on:
   push:
@@ -21,7 +21,7 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build with Maven (Quarkus)
+      - name: Build with Maven
         run: |
           retry_count=0
           max_retries=3

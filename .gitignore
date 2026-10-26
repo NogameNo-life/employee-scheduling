@@ -25,3 +25,12 @@ build/
 # Logs
 logs/
 *.log
+
+# Export directories
+src/main/resources/excelExport/
+reports/
+
+# Claude Code (personal, not shared)
+CLAUDE.md
+CLAUDE.local.md
+.claude/

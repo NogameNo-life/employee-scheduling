@@ -1,0 +1,7 @@
+# The TABU2 SQL Server (sqlbd1) only supports TLS 1.0, which Java 21 disables by default:
+#   "The server selected protocol version TLS10 is not accepted by client preferences [TLS13, TLS12]"
+# Load this file with -Djava.security.properties=<path to this file>.
+# It is the JDK 21 default list without TLSv1 and TLSv1.1. Remove it once the server supports TLS 1.2.
+jdk.tls.disabledAlgorithms=SSLv3, DTLSv1.0, RC4, DES, \
+    MD5withRSA, DH keySize < 1024, EC keySize < 224, 3DES_EDE_CBC, anon, NULL, \
+    ECDH

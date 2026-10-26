@@ -1,0 +1,76 @@
+<html lang="en">
+<head>
+  <meta content="text/html; charset=UTF-8" http-equiv="Content-Type">
+  <meta content="width=device-width, initial-scale=1" name="viewport">
+  <title>Employee scheduling</title>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.2/styles/vis-timeline-graph2d.min.css"
+        integrity="sha256-svzNasPg1yR5gvEaRei2jg+n4Pc3sVyMUWeS6xRAh6U=" crossorigin="anonymous">
+
+  <link rel="stylesheet" href="/webjars/bootstrap/css/bootstrap.min.css"/>
+  <link rel="stylesheet" href="/webjars/font-awesome/css/all.css"/>
+  <style>
+    .vis-time-axis .vis-grid.vis-saturday,
+    .vis-time-axis .vis-grid.vis-sunday {
+      background: #D3D7CFFF;
+    }
+    .vis-item { cursor: pointer; }
+    .crew-color { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; }
+  </style>
+</head>
+
+<body>
+<div class="container-fluid">
+  <div class="sticky-top d-flex justify-content-center align-items-center" aria-live="polite" aria-atomic="true">
+    <div id="notificationPanel" style="position: absolute; top: .5rem;"></div>
+  </div>
+  <h1>Employee scheduling</h1>
+  <p>
+    Crew schedule by line: every day the first crew works the day shift (08:00-20:00) and the second crew works
+    the night shift (20:00-08:00). Every crew works Day - Night - Sleep day - Day off.
+  </p>
+  <p class="text-muted small" id="version"></p>
+
+  <div class="mb-2">
+    <input id="monthInput" type="month" class="form-control d-inline-block w-auto align-middle">
+    <button id="generateButton" type="button" class="btn btn-secondary">
+      <span class="fas fa-calendar-alt"></span> Generate
+    </button>
+    <button id="refreshButton" type="button" class="btn btn-secondary">
+      <span class="fas fa-refresh"></span> Refresh
+    </button>
+    <span id="unassignedPositions" class="ms-2 align-middle fw-bold"></span>
+
+    <div class="float-end">
+      <ul class="nav nav-pills" role="tablist">
+        <li class="nav-item" role="presentation">
+          <button class="nav-link active" id="byLineTab" data-bs-toggle="tab" data-bs-target="#byLinePanel" type="button" role="tab" aria-controls="byLinePanel" aria-selected="true">By line</button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="nav-link" id="byEmployeeTab" data-bs-toggle="tab" data-bs-target="#byEmployeePanel" type="button" role="tab" aria-controls="byEmployeePanel" aria-selected="false">By employee</button>
+        </li>
+      </ul>
+    </div>
+  </div>
+  <div class="mb-4 tab-content">
+    <div class="tab-pane fade show active" id="byLinePanel" role="tabpanel" aria-labelledby="byLineTab">
+      <div id="lineVisualization"></div>
+    </div>
+    <div class="tab-pane fade" id="byEmployeePanel" role="tabpanel" aria-labelledby="byEmployeeTab">
+      <div id="employeeVisualization"></div>
+    </div>
+  </div>
+
+  <h2 class="h4">Crews <span id="crewCount" class="text-muted fs-6"></span></h2>
+  <p class="text-muted small mb-2">Click a crew (here or in the timeline) to see all its employees.</p>
+  <div class="accordion mb-4" id="crewList"></div>
+</div>
+
+<script src="/webjars/jquery/jquery.min.js"></script>
+<script src="/webjars/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/webjars/js-joda/dist/js-joda.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.2/standalone/umd/vis-timeline-graph2d.min.js"
+        integrity="sha256-Jy2+UO7rZ2Dgik50z3XrrNpnc5+2PAx9MhL2CicodME=" crossorigin="anonymous"></script>
+<script src="/app.js"></script>
+</body>
+</html>
