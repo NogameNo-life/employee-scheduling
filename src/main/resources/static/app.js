@@ -359,36 +359,69 @@ function crewShiftUrl(crewShiftId) {
   return "/crew-schedules/crew-shifts/" + encodeURIComponent(crewShiftId);
 }
 
-// Gantt chart of the assignments: one row per employee, one bar per assigned position
+// Gantt chart by employee: employees grouped by crew (sorted by number), sorted by name within the crew.
+// An employee works every crew shift of their crew; the bar shows the line, and the role if a position of
+// that crew shift is assigned to the employee. The label has the shifts and hours of the month.
 function renderEmployees(schedule) {
   byEmployeeGroupDataSet.clear();
   byEmployeeItemDataSet.clear();
 
-  const employees = new Map();
+  const roleByShiftAndEmployee = new Map();
   $.each(schedule.positions, (index, position) => {
     if (position.employee != null) {
-      employees.set(position.employee.id, position.employee);
+      roleByShiftAndEmployee.set(`${position.crewShift.id}/${position.employee.id}`, position.role.name);
     }
   });
-  [...employees.values()]
-    .sort((a, b) => a.fullName.localeCompare(b.fullName))
-    .forEach((employee, index) => byEmployeeGroupDataSet.add({id: employee.id, order: index, content: employee.fullName}));
+  const shiftsByCrew = new Map();
+  $.each(schedule.crewShifts, (index, crewShift) => {
+    if (!shiftsByCrew.has(crewShift.crew.id)) {
+      shiftsByCrew.set(crewShift.crew.id, []);
+    }
+    shiftsByCrew.get(crewShift.crew.id).push(crewShift);
+  });
+  const employeesByCrew = new Map();
+  $.each(schedule.employees, (index, employee) => {
+    if (!employeesByCrew.has(employee.crew.id)) {
+      employeesByCrew.set(employee.crew.id, {crew: employee.crew, employees: []});
+    }
+    employeesByCrew.get(employee.crew.id).employees.push(employee);
+  });
 
-  $.each(schedule.positions, (index, position) => {
-    if (position.employee == null) {
-      return;
-    }
-    const crewShift = position.crewShift;
-    const element = $(`<div class="card-body p-2"/>`)
-      .append($(`<h5 class="card-title mb-1"/>`).text(position.role.name))
-      .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${crewShift.line.name}, ${crewShift.crew.name}`));
-    byEmployeeItemDataSet.add({
-      id: position.id, group: position.employee.id, crewId: crewShift.crew.id,
-      content: element.html(),
-      start: crewShift.start, end: crewShift.end,
-      style: "background-color: " + pickColor("crew" + crewShift.crew.id)
+  let order = 0;
+  [...employeesByCrew.values()]
+    .sort((a, b) => a.crew.id - b.crew.id)
+    .forEach(({crew, employees}) => {
+      employees.sort((a, b) => a.fullName.localeCompare(b.fullName) || a.id - b.id);
+      const crewShifts = shiftsByCrew.get(crew.id) || [];
+      const hours = crewShifts.reduce((sum, crewShift) =>
+        sum + (new Date(crewShift.end) - new Date(crewShift.start)) / (1000 * 60 * 60), 0);
+      byEmployeeGroupDataSet.add({
+        id: `crew-${crew.id}`, order: order++, showNested: true,
+        nestedGroups: employees.map(employee => employee.id),
+        content: $(`<div/>`).append($(`<strong/>`).text(crewName(crew))
+          .append($(`<span class="crew-color ms-2"/>`).css("background-color", pickColor("crew" + crew.id)))).html()
+      });
+      employees.forEach(employee => {
+        byEmployeeGroupDataSet.add({
+          id: employee.id, order: order++,
+          content: $(`<div/>`)
+            .append($(`<div/>`).text(employee.fullName))
+            .append($(`<div class="text-muted small"/>`).text(`${crewShifts.length} shifts, ${hours} h`)).html()
+        });
+        crewShifts.forEach(crewShift => {
+          const role = roleByShiftAndEmployee.get(`${crewShift.id}/${employee.id}`);
+          const element = $(`<div class="card-body p-2"/>`)
+            .append($(`<h5 class="card-title mb-1"/>`).text(crewShift.line.name))
+            .append($(`<p class="card-text ms-2 mb-0"/>`).text(role == null ? crewName(crew) : `${crewName(crew)}, ${role}`));
+          byEmployeeItemDataSet.add({
+            id: `${crewShift.id}/${employee.id}`, group: employee.id, crewId: crew.id,
+            content: element.html(),
+            start: crewShift.start, end: crewShift.end,
+            style: "background-color: " + pickColor("crew" + crew.id)
+          });
+        });
+      });
     });
-  });
 }
 
 // Crew list: one accordion item per crew; the body has the composition and all employees of the crew.
