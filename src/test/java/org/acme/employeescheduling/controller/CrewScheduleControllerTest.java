@@ -60,7 +60,8 @@ class CrewScheduleControllerTest {
         Crew crew2 = new Crew(2, "Cr2");
         Role packer = new Role(10, "Packer");
         CrewData data = new CrewData(List.of(crew1, crew2), List.of(packer),
-                List.of(new Employee(100, "Anna", crew1, new HashSet<>())), Map.of(1, Map.of(packer, 2)));
+                List.of(new Employee(100, "Anna", crew1, new HashSet<>()), new Employee(200, "Boris", crew2,
+                        new HashSet<>())), Map.of(1, Map.of(packer, 2)));
         repository.create(SessionHeader.DEFAULT_SESSION_ID,
                 factory.createEmpty(YearMonth.of(2026, 11), List.of(new Line("L1", "Line 1")), data));
     }
@@ -98,6 +99,28 @@ class CrewScheduleControllerTest {
     }
 
     @Test
+    void replaceAnEmployeeForOneShift() throws Exception {
+        mvc.perform(json(post("/crew-schedules/crew-shifts"), shift("DAY", 1))).andExpect(status().isOk());
+
+        mvc.perform(json(post("/crew-schedules/crew-shifts/" + SHIFT_ID + "/replacements"),
+                "{\"employeeId\": 100, \"substituteId\": 200}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds", hasSize(1)))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds[0]").value(200))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.absentEmployeeIds[0]").value(100))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.extraEmployeeIds[0]").value(200));
+
+        mvc.perform(delete("/crew-schedules/crew-shifts/" + SHIFT_ID + "/employees/200"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds", hasSize(0)));
+        mvc.perform(put("/crew-schedules/crew-shifts/" + SHIFT_ID + "/employees/100"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds[0]").value(100));
+        mvc.perform(put("/crew-schedules/crew-shifts/" + SHIFT_ID + "/employees/100"))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
     void dateOutsideTheMonthIsABadRequest() throws Exception {
         mvc.perform(json(post("/crew-schedules/crew-shifts"),
                 "{\"date\": \"2026-12-01\", \"type\": \"DAY\", \"lineId\": \"L1\", \"crewId\": 1}"))
@@ -105,28 +128,11 @@ class CrewScheduleControllerTest {
     }
 
     @Test
-    void changeTheCompositionAndMoveAnEmployee() throws Exception {
-        mvc.perform(json(put("/crew-schedules/crews/1/roles/10"), "{\"count\": 3}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].crew.staffCount").value(3))
-                .andExpect(jsonPath("$[0].composition", hasSize(1)))
-                .andExpect(jsonPath("$[0].composition[0].validFrom").value("2026-11-01"))
-                .andExpect(jsonPath("$[0].composition[0].roles[0].role.name").value("Packer"))
-                .andExpect(jsonPath("$[0].composition[0].roles[0].count").value(3));
-
-        mvc.perform(json(put("/crew-schedules/crews/1/roles/10"), "{\"count\": 5, \"validFrom\": \"2026-11-15\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].crew.staffCount").value(3))
-                .andExpect(jsonPath("$[0].composition[1].validFrom").value("2026-11-15"))
-                .andExpect(jsonPath("$[0].composition[1].staffCount").value(5));
-        mvc.perform(delete("/crew-schedules/crews/1/composition/2026-11-15"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].composition", hasSize(1)));
-        mvc.perform(delete("/crew-schedules/crews/1/composition/2026-11-01")).andExpect(status().isConflict());
-
+    void moveAnEmployeeToAnotherCrew() throws Exception {
         mvc.perform(json(put("/crew-schedules/employees/100/crew"), "{\"crewId\": 2}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].employees", hasSize(0)))
+                .andExpect(jsonPath("$[1].employees", hasSize(2)))
                 .andExpect(jsonPath("$[1].employees[0].fullName").value("Anna"))
                 .andExpect(jsonPath("$[1].employees[0].crew.id").value(2));
     }

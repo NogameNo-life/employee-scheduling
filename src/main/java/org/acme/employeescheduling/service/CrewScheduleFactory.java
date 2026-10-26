@@ -12,7 +12,6 @@ import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
-import org.acme.employeescheduling.domain.CrewComposition;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
@@ -27,15 +26,10 @@ import org.acme.employeescheduling.domain.Role;
 @Service
 public class CrewScheduleFactory {
 
-    /**
-     * A new version for {@code month} without crew shifts: the user enters the crew schedule.
-     * The composition from the DB is valid from the first day of the month.
-     */
+    /** A new version for {@code month} without crew shifts: the user enters the crew schedule. */
     public CrewSchedule createEmpty(YearMonth month, List<Line> lines, CrewData data) {
-        Map<Integer, CrewComposition> composition = new HashMap<>();
-        data.composition().forEach((crewId, rolesNeeded) ->
-                composition.put(crewId, new CrewComposition(month.atDay(1), rolesNeeded)));
-        return copy(month, lines, data.crews(), data.roles(), data.employees(), composition, List.of(), List.of());
+        return copy(month, lines, data.crews(), data.roles(), data.employees(), data.composition(),
+                List.of(), List.of());
     }
 
     /** A separate version with the same content as {@code source}; changing one does not change the other. */
@@ -60,7 +54,7 @@ public class CrewScheduleFactory {
     }
 
     private CrewSchedule copy(YearMonth month, List<Line> lines, List<Crew> crews, List<Role> roles,
-            List<Employee> employees, Map<Integer, CrewComposition> composition, List<CrewShift> crewShifts,
+            List<Employee> employees, Map<Integer, Map<Role, Integer>> composition, List<CrewShift> crewShifts,
             List<Position> positions) {
         Map<Integer, Crew> crewsById = new HashMap<>();
         List<Crew> crewCopies = new ArrayList<>();
@@ -83,14 +77,16 @@ public class CrewScheduleFactory {
             employeeCopies.add(copy);
         }
 
-        Map<Integer, CrewComposition> compositionCopy = new HashMap<>();
-        composition.forEach((crewId, crewComposition) -> compositionCopy.put(crewId, crewComposition.copy()));
+        Map<Integer, Map<Role, Integer>> compositionCopy = new HashMap<>();
+        composition.forEach((crewId, rolesNeeded) -> compositionCopy.put(crewId, new HashMap<>(rolesNeeded)));
 
         List<CrewShift> crewShiftCopies = new ArrayList<>();
         for (CrewShift crewShift : crewShifts) {
             CrewShift copy = new CrewShift(crewShift.getId(), crewShift.getDate(), crewShift.getType(),
                     crewShift.getLine(), crewsById.get(crewShift.getCrew().getId()));
             copy.setPinned(crewShift.isPinned());
+            crewShift.getAbsentEmployees().forEach(e -> copy.getAbsentEmployees().add(employeesById.get(e.getId())));
+            crewShift.getExtraEmployees().forEach(e -> copy.getExtraEmployees().add(employeesById.get(e.getId())));
             crewShiftCopies.add(copy);
         }
         Map<String, CrewShift> crewShiftsById = crewShiftCopies.stream()

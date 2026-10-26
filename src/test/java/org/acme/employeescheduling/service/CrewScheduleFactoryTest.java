@@ -45,12 +45,10 @@ class CrewScheduleFactoryTest {
         Employee copiedAnna = copiedCrew.getEmployees().get(0);
         assertThat(copiedAnna).isNotSameAs(anna).isSameAs(schedule.getEmployees().get(0));
         assertThat(copiedAnna.getCrew()).isSameAs(copiedCrew);
-        // The composition from the DB is valid from the first day of the month
-        assertThat(schedule.getComposition().get(1).getVersions()).containsOnlyKeys(MONTH.atDay(1));
-        assertThat(schedule.getComposition().get(1).rolesNeededOn(MONTH.atEndOfMonth())).containsEntry(role, 2);
+        assertThat(schedule.getComposition()).isEqualTo(data.composition());
 
         // Changing the version does not change the master data
-        schedule.getComposition().get(1).setRoleCount(MONTH.atDay(1), role, 5);
+        schedule.getComposition().get(1).put(role, 5);
         copiedAnna.setCrew(null);
         assertThat(data.composition().get(1)).containsEntry(role, 2);
         assertThat(anna.getCrew()).isSameAs(crew);
@@ -62,6 +60,7 @@ class CrewScheduleFactoryTest {
         new CrewScheduleEditor(factory).addCrewShift(source,
                 new CrewShiftRequest(LocalDate.of(2026, 11, 1), ShiftType.DAY, "L1", 1));
         source.getCrewShifts().get(0).setPinned(true);
+        source.getCrewShifts().get(0).getAbsentEmployees().add(source.getEmployees().get(0));
         Position sourcePosition = source.getPositions().get(0);
         sourcePosition.setEmployee(source.getEmployees().get(0));
         sourcePosition.setPinned(true);
@@ -72,6 +71,8 @@ class CrewScheduleFactoryTest {
         assertThat(copy.getCrewShifts().get(0)).isNotSameAs(source.getCrewShifts().get(0));
         assertThat(copy.getCrewShifts().get(0).isPinned()).isTrue();
         assertThat(copy.getCrewShifts().get(0).getCrew()).isSameAs(copy.getCrews().get(0));
+        assertThat(copy.getCrewShifts().get(0).getAbsentEmployees()).singleElement()
+                .isSameAs(copy.getEmployees().get(0));
         assertThat(copy.getPositions()).hasSize(2);
         Position copied = copy.getPositions().get(0);
         assertThat(copied).isNotSameAs(sourcePosition);

@@ -1,7 +1,6 @@
 package org.acme.employeescheduling.controller;
 
 import java.time.Clock;
-import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -9,7 +8,6 @@ import java.util.List;
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.Line;
-import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.exception.ScheduleException;
 import org.acme.employeescheduling.repository.CrewScheduleRepository.ScheduleVersion;
 import org.acme.employeescheduling.service.CrewDataCache;
@@ -20,7 +18,6 @@ import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -85,18 +82,11 @@ public class CrewScheduleController {
         return crewDataCache.getLines();
     }
 
-    /** Crews of the caller's version with their lines, composition and all their employees. */
+    /** Crews of the caller's version with their lines, composition by role (read-only) and all their employees. */
     @GetMapping("/crews")
     public List<CrewDetails> crews(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
         return rosterService.toCrewDetails(sessionService.requireVersion(sessionId).schedule());
-    }
-
-    /** All roles of the caller's version, sorted by name (for adding a role to a crew). */
-    @GetMapping("/roles")
-    public List<Role> roles(
-            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
-        return rosterService.roles(sessionService.requireVersion(sessionId).schedule());
     }
 
     /**
@@ -152,30 +142,37 @@ public class CrewScheduleController {
                 schedule -> editor.setPinned(schedule, crewShiftId, request.pinned())));
     }
 
-    /**
-     * Sets how many people of a role the crew needs per shift from {@code validFrom} (default: the first day of
-     * the month) until the next composition version; 0 removes the role. Earlier crew shifts do not change.
-     */
-    @PutMapping("/crews/{crewId}/roles/{roleId}")
-    public List<CrewDetails> setRoleCount(
+    /** The employee works this crew shift (only this one): back from absence, or as a substitute. */
+    @PutMapping("/crew-shifts/{crewShiftId}/employees/{employeeId}")
+    public RotationResponse addEmployeeToShift(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @PathVariable int crewId, @PathVariable int roleId, @RequestBody RoleCountRequest request) {
-        ScheduleVersion version = sessionService.edit(sessionId,
-                schedule -> editor.setRoleCount(schedule, crewId, roleId, request.count(), request.validFrom()));
-        return rosterService.toCrewDetails(version.schedule());
+            @PathVariable String crewShiftId, @PathVariable int employeeId) {
+        return toResponse(sessionId, sessionService.edit(sessionId,
+                schedule -> editor.addEmployeeToShift(schedule, crewShiftId, employeeId)));
     }
 
-    /** Removes a composition version of the crew: from its date on, the previous version is valid again. */
-    @DeleteMapping("/crews/{crewId}/composition/{validFrom}")
-    public List<CrewDetails> removeCompositionVersion(
+    /** The employee does not work this crew shift (only this one). */
+    @DeleteMapping("/crew-shifts/{crewShiftId}/employees/{employeeId}")
+    public RotationResponse removeEmployeeFromShift(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @PathVariable int crewId, @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate validFrom) {
-        ScheduleVersion version = sessionService.edit(sessionId,
-                schedule -> editor.removeCompositionVersion(schedule, crewId, validFrom));
-        return rosterService.toCrewDetails(version.schedule());
+            @PathVariable String crewShiftId, @PathVariable int employeeId) {
+        return toResponse(sessionId, sessionService.edit(sessionId,
+                schedule -> editor.removeEmployeeFromShift(schedule, crewShiftId, employeeId)));
     }
 
-    /** Moves an employee to another crew. */
+    /** {@code employeeId} does not work this crew shift, {@code substituteId} works it instead (one step). */
+    @PostMapping("/crew-shifts/{crewShiftId}/replacements")
+    public RotationResponse replaceEmployee(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @PathVariable String crewShiftId, @RequestBody ReplacementRequest request) {
+        if (request.employeeId() == null || request.substituteId() == null) {
+            throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, "employeeId and substituteId are required.");
+        }
+        return toResponse(sessionId, sessionService.edit(sessionId, schedule -> editor.replaceEmployee(schedule,
+                crewShiftId, request.employeeId(), request.substituteId())));
+    }
+
+    /** Moves an employee to another crew: changes the default composition of both crews. */
     @PutMapping("/employees/{employeeId}/crew")
     public List<CrewDetails> moveEmployee(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
@@ -199,7 +196,7 @@ public class CrewScheduleController {
     public record PinnedRequest(boolean pinned) {
     }
 
-    public record RoleCountRequest(int count, LocalDate validFrom) {
+    public record ReplacementRequest(Integer employeeId, Integer substituteId) {
     }
 
     public record EmployeeCrewRequest(Integer crewId) {

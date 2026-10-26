@@ -16,6 +16,8 @@
     }
     .vis-item { cursor: pointer; }
     .vis-item.pinned { border-width: 3px; border-color: #2E3436; }
+    .vis-item.absent { background-color: #EEEEEC; border-color: #BABDB6; color: #888A85; text-decoration: line-through; }
+    .vis-item.substitute { border-style: dashed; border-width: 2px; border-color: #2E3436; }
     .pin-toggle { cursor: pointer; }
     .crew-link:hover { text-decoration: underline; }
     .role-count { width: 5rem; }
@@ -38,6 +40,12 @@
     <strong>Change the crew:</strong> double-click a shift. <strong>Move:</strong> drag a shift.
     <strong>Remove:</strong> select a shift and press &times;.
     <strong>Pin:</strong> click <span class="fas fa-lock-open"></span> on a shift; a pinned shift cannot be moved or removed.
+  </p>
+  <p class="text-muted small mb-2">
+    <strong>By employee:</strong> a crew shift has the employees of its crew, but one shift can differ.
+    Double-click an employee's shift to take them off this shift or replace them with a free employee
+    (dashed = substitute, grey = absent). Double-click an empty place in an employee's row to add them to a crew
+    shift at that time. Only that shift changes, not the crew.
   </p>
   <p class="text-muted small" id="version"></p>
 
@@ -73,9 +81,9 @@
 
   <h2 class="h4">Crews <span id="crewCount" class="text-muted fs-6"></span></h2>
   <p class="text-muted small mb-2">
-    Click a crew (here, or its name in the timeline) to see and change its composition (people per shift for each role)
-    and its employees. A composition change is valid from a date: crew shifts before that date keep the old one.
-    Changes are kept only in your schedule version.
+    Click a crew (here, or its name in the timeline) to see its roles and its employees (the default composition of
+    its shifts). The crew of an employee can be changed; roles are read-only. Changes are kept only in your schedule
+    version.
   </p>
   <div class="accordion mb-4" id="crewList"></div>
 </div>
@@ -95,6 +103,28 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
         <button type="button" class="btn btn-primary" id="crewShiftModalSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="shiftEmployeeModal" tabindex="-1" aria-labelledby="shiftEmployeeModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="shiftEmployeeModalTitle">Employee</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p id="shiftEmployeeModalText" class="mb-2"></p>
+        <div id="shiftEmployeeModalSelectGroup">
+          <label for="shiftEmployeeModalSelect" class="form-label" id="shiftEmployeeModalSelectLabel"></label>
+          <select id="shiftEmployeeModalSelect" class="form-select"></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="shiftEmployeeModalSave">Save</button>
       </div>
     </div>
   </div>

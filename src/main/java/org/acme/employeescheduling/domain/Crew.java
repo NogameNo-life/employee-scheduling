@@ -22,10 +22,7 @@ public class Crew {
 
     private String name;
 
-    /**
-     * People needed in this crew per shift: the sum of PLR_RLBR.NPERS over all roles of the crew.
-     * In a schedule version: on the first day of the month (the composition can change from a later date).
-     */
+    /** People needed in this crew per shift: the sum of PLR_RLBR.NPERS over all roles of the crew. */
     private int staffCount;
 
     /**
