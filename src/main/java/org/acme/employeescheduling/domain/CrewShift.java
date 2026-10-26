@@ -10,7 +10,7 @@ import lombok.Setter;
 
 /**
  * "Crew X works on line Y, on date Z, day or night shift".
- * Comes from the crew schedule (generated or entered manually).
+ * Entered by the user in the crew schedule editor.
  */
 @Getter
 @Setter
@@ -25,6 +25,9 @@ public class CrewShift {
     private ShiftType type;
     private Line line;
     private Crew crew;
+
+    /** Set by the user: a pinned crew shift cannot be moved or removed until it is unpinned. */
+    private boolean pinned;
 
     public CrewShift(String id, LocalDate date, ShiftType type, Line line, Crew crew) {
         this.id = id;

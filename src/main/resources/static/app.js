@@ -1,8 +1,6 @@
 // Every browser tab is one user with its own schedule version (same key as production-automation-portal-react)
 const sessionId = getSessionId();
 
-const DAY_SHIFT_START = JSJoda.LocalTime.of(8, 0);
-const NIGHT_SHIFT_START = JSJoda.LocalTime.of(20, 0);
 const timeFormat = JSJoda.DateTimeFormatter.ofPattern("HH:mm");
 
 const byLinePanel = document.getElementById("lineVisualization");
@@ -11,7 +9,13 @@ const byLineTimelineOptions = {
   orientation: {axis: "top"},
   stack: false,
   xss: {disabled: true}, // Items are XSS safe through JQuery
-  zoomMin: 1000 * 60 * 60 * 24 // One day in milliseconds
+  zoomMin: 1000 * 60 * 60 * 24, // One day in milliseconds
+  // Crew shifts are added with a double-click (crew picker), moved by dragging and removed with the x.
+  // Pinned crew shifts have editable: false.
+  editable: {add: false, remove: true, updateTime: true, updateGroup: true, overrideItems: false},
+  snap: snapToShiftStart,
+  onMove: moveCrewShift,
+  onRemove: removeCrewShift
 };
 var byLineGroupDataSet = new vis.DataSet();
 var byLineItemDataSet = new vis.DataSet();
@@ -30,12 +34,24 @@ var byEmployeeItemDataSet = new vis.DataSet();
 var byEmployeeTimeline = new vis.Timeline(byEmployeePanel, byEmployeeItemDataSet, byEmployeeGroupDataSet,
   byEmployeeTimelineOptions);
 
+// Month shown in the timelines: the window is set again only when it changes, not after every edit
+let shownMonth = null;
+// Line id -> line, crews (CrewDetails) and roles of the version: for the crew picker and the crew list
+const linesById = new Map();
+let crewDetailsList = [];
+let allRoles = [];
+// The line shift the crew picker is open for: {date, type, lineId, crewShiftId (null: new), crewId}
+let pickerSlot = null;
+
 $(document).ready(function () {
-  $("#generateButton").click(function () {
-    generate();
+  $("#newMonthButton").click(function () {
+    newEmptyMonth();
   });
   $("#refreshButton").click(function () {
     refreshSchedule();
+  });
+  $("#crewShiftModalSave").click(function () {
+    saveCrewShift();
   });
   // HACK to allow vis-timeline to work within Bootstrap tabs
   $("#byLineTab").on('shown.bs.tab', function (event) {
@@ -44,8 +60,19 @@ $(document).ready(function () {
   $("#byEmployeeTab").on('shown.bs.tab', function (event) {
     byEmployeeTimeline.redraw();
   })
-  // Click on a shift: open its crew in the crew list
-  byLineTimeline.on("click", props => openCrewOfItem(byLineItemDataSet, props.item));
+  // Click on a shift: the lock icon pins/unpins it, the crew name opens the crew in the crew list.
+  // A click elsewhere only selects the shift (to drag it or remove it with the x).
+  byLineTimeline.on("click", props => {
+    if (props.item == null) {
+      return;
+    }
+    if (clickedOn(props.event, ".pin-toggle")) {
+      togglePinned(props.item);
+    } else if (clickedOn(props.event, ".crew-link")) {
+      openCrewOfItem(byLineItemDataSet, props.item);
+    }
+  });
+  byLineTimeline.on("doubleClick", onLineDoubleClick);
   byEmployeeTimeline.on("click", props => openCrewOfItem(byEmployeeItemDataSet, props.item));
 
   setupAjax();
@@ -60,32 +87,17 @@ function setupAjax() {
       'X-Session-Id': sessionId,
     }
   });
-
-  // Extend jQuery to support $.put() and $.delete()
-  jQuery.each(["put", "delete"], function (i, method) {
-    jQuery[method] = function (url, data, callback, type) {
-      if (jQuery.isFunction(data)) {
-        type = type || callback;
-        callback = data;
-        data = undefined;
-      }
-      return jQuery.ajax({
-        url: url,
-        type: method,
-        dataType: type,
-        data: data,
-        success: callback
-      });
-    };
-  });
 }
 
-// Crew schedule: generated when the application starts, or by the "Generate" button
+// Sends a JSON request; the answer is JSON too
+function send(method, url, body) {
+  return $.ajax({url: url, type: method, data: body == null ? undefined : JSON.stringify(body), dataType: "json"});
+}
+
+// Crew schedule of the version: empty at the start of a month, entered by the user
 function refreshSchedule() {
   $.getJSON("/crew-schedules/rotation", function (roster) {
-    renderRoster(roster);
-    refreshPositions();
-    refreshCrews();
+    onRosterChanged(roster);
   }).fail(function (xhr, ajaxOptions, thrownError) {
     if (xhr.status === 404) {
       // No version yet (e.g. the crews could not be loaded at startup): show at least the lines
@@ -107,13 +119,15 @@ function refreshLines() {
   });
 }
 
-// Crews of the version with all their employees, shown below the timeline
+// Crews of the version with their composition and all their employees, shown below the timeline
 function refreshCrews() {
-  $.getJSON("/crew-schedules/crews", function (crews) {
-    renderCrews(crews);
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Getting the crews failed.", xhr);
-  });
+  $.when($.getJSON("/crew-schedules/crews"), $.getJSON("/crew-schedules/roles"))
+    .done(function (crewsResult, rolesResult) {
+      allRoles = rolesResult[0];
+      renderCrews(crewsResult[0]);
+    }).fail(function (xhr, ajaxOptions, thrownError) {
+      showError("Getting the crews failed.", xhr);
+    });
 }
 
 // Employees assigned to the positions of the crew shifts
@@ -127,14 +141,26 @@ function refreshPositions() {
   });
 }
 
-function generate() {
+// The server answers every change of the crew schedule with the whole crew schedule
+function onRosterChanged(roster) {
+  renderRoster(roster);
+  refreshPositions();
+  refreshCrews();
+}
+
+function newEmptyMonth() {
   const month = $("#monthInput").val();
+  if (!month) {
+    showSimpleError("Choose a month first.");
+    return;
+  }
+  if (!confirm(`Start an empty crew schedule for ${month}? Your current schedule version will be replaced.`)) {
+    return;
+  }
   $.post("/crew-schedules/init?month=" + month, function (roster) {
-    renderRoster(roster);
-    refreshPositions();
-    refreshCrews();
+    onRosterChanged(roster);
   }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Generating the crew schedule failed.", xhr);
+    showError("Creating the crew schedule failed.", xhr);
   });
 }
 
@@ -145,40 +171,51 @@ function renderRoster(roster) {
   byLineGroupDataSet.clear();
   byLineItemDataSet.clear();
   if (roster.lines.length === 0) {
-    showSimpleError("There is no crew schedule: no lines or not enough crews (4 per line). Press Generate.");
+    showSimpleError("There are no lines.");
     return;
   }
 
   renderLineGroups(roster.lines.map(lineSchedule => lineSchedule.line));
   $.each(roster.lines, (index, lineSchedule) => {
-    const line = lineSchedule.line;
     $.each(lineSchedule.days, (i, day) => {
-      const date = JSJoda.LocalDate.parse(day.date);
-      addCrewShiftItem(line, day.dayCrew, date.atTime(DAY_SHIFT_START), date.atTime(NIGHT_SHIFT_START));
-      addCrewShiftItem(line, day.nightCrew, date.atTime(NIGHT_SHIFT_START), date.plusDays(1).atTime(DAY_SHIFT_START));
+      addCrewShiftItem(day.dayShift);
+      addCrewShiftItem(day.nightShift);
     });
   });
-  setWindow(roster);
+  if (shownMonth !== roster.month) {
+    shownMonth = roster.month;
+    setWindow(roster);
+  }
 }
 
 // One timeline row per line, in the given order
 function renderLineGroups(lines) {
+  linesById.clear();
   $.each(lines, (index, line) => {
+    linesById.set(line.id, line);
     byLineGroupDataSet.add({id: line.id, order: index, content: $(`<div/>`).append($(`<h5 class="card-title mb-1"/>`).text(line.name)).html()});
   });
 }
 
-function addCrewShiftItem(line, crew, start, end) {
-  if (crew == null) {
+function addCrewShiftItem(crewShift) {
+  if (crewShift == null) {
     return;
   }
+  const crew = crewShift.crew;
+  const start = JSJoda.LocalDateTime.parse(crewShift.start);
+  const end = JSJoda.LocalDateTime.parse(crewShift.end);
+  const pin = $(`<span class="pin-toggle fas me-1"/>`)
+    .addClass(crewShift.pinned ? "fa-lock" : "fa-lock-open")
+    .attr("title", crewShift.pinned ? "Pinned. Click to unpin." : "Click to pin.");
   const element = $(`<div class="card-body p-2"/>`)
-    .append($(`<h5 class="card-title mb-1"/>`).text(crewName(crew)))
+    .append($(`<h5 class="card-title mb-1"/>`).append(pin).append($(`<span class="crew-link"/>`).text(crewName(crew))))
     .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${start.format(timeFormat)} - ${end.format(timeFormat)}`));
   byLineItemDataSet.add({
-    id: `${line.id}_${start}`, group: line.id, crewId: crew.id,
+    id: crewShift.id, group: crewShift.line.id, crewId: crew.id,
+    shiftDate: crewShift.date, shiftType: crewShift.type, pinned: crewShift.pinned,
+    editable: !crewShift.pinned, className: crewShift.pinned ? "pinned" : "",
     content: element.html(),
-    start: start.toString(), end: end.toString(),
+    start: crewShift.start, end: crewShift.end,
     style: "background-color: " + pickColor("crew" + crew.id)
   });
 }
@@ -190,6 +227,136 @@ function setWindow(roster) {
   const firstDay = JSJoda.YearMonth.from(today).equals(month) ? today : month.atDay(1);
   byLineTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
   byEmployeeTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
+}
+
+// Shifts start at 08:00 and 20:00: a dragged shift snaps to the nearest start
+function snapToShiftStart(date) {
+  const time = new Date(date);
+  const starts = [-4, 8, 20, 32].map(hours => new Date(time.getFullYear(), time.getMonth(), time.getDate(), hours));
+  return starts.reduce((best, start) => Math.abs(start - time) < Math.abs(best - time) ? start : best);
+}
+
+// The line shift at a time: 08:00-20:00 is the day shift, 20:00-08:00 the night shift of the day it starts
+function slotOf(time) {
+  const date = new Date(time);
+  let day = JSJoda.LocalDate.of(date.getFullYear(), date.getMonth() + 1, date.getDate());
+  const hour = date.getHours();
+  if (hour >= 8 && hour < 20) {
+    return {date: day.toString(), type: "DAY"};
+  }
+  if (hour < 8) {
+    day = day.minusDays(1);
+  }
+  return {date: day.toString(), type: "NIGHT"};
+}
+
+// Double-click on an empty place: add a crew; on a crew shift: give it another crew
+function onLineDoubleClick(props) {
+  if (props.item != null) {
+    const item = byLineItemDataSet.get(props.item);
+    if (item == null) {
+      return;
+    }
+    if (item.pinned) {
+      showSimpleError("This crew shift is pinned. Unpin it first.");
+      return;
+    }
+    openCrewPicker({date: item.shiftDate, type: item.shiftType, lineId: item.group, crewShiftId: item.id, crewId: item.crewId});
+    return;
+  }
+  if (props.what !== "background" || props.group == null || props.time == null) {
+    return;
+  }
+  openCrewPicker({...slotOf(props.time), lineId: props.group, crewShiftId: null, crewId: null});
+}
+
+function openCrewPicker(slot) {
+  if (crewDetailsList.length === 0) {
+    showSimpleError("There are no crews.");
+    return;
+  }
+  pickerSlot = slot;
+  const line = linesById.get(slot.lineId);
+  const shiftName = slot.type === "DAY" ? "day shift (08:00-20:00)" : "night shift (20:00-08:00)";
+  $("#crewShiftModalTitle").text(slot.crewShiftId == null ? "Add a crew" : "Change the crew");
+  $("#crewShiftModalSlot").text(`${line == null ? slot.lineId : line.name}, ${slot.date}, ${shiftName}`);
+
+  // Crews that already work at the same time on another line cannot be chosen
+  const busy = new Map();
+  byLineItemDataSet.forEach(item => {
+    if (item.id !== slot.crewShiftId && item.shiftDate === slot.date && item.shiftType === slot.type) {
+      const line = linesById.get(item.group);
+      busy.set(item.crewId, line == null ? item.group : line.name);
+    }
+  });
+  const select = $("#crewShiftModalCrew").empty();
+  $.each(crewDetailsList, (index, details) => {
+    const crew = details.crew;
+    const option = $(`<option/>`).val(crew.id)
+      .text(crewName(crew) + (busy.has(crew.id) ? ` (works on ${busy.get(crew.id)})` : ""))
+      .prop("disabled", busy.has(crew.id));
+    select.append(option);
+  });
+  const selectable = select.find("option:not(:disabled)");
+  if (slot.crewId != null) {
+    select.val(slot.crewId);
+  } else if (selectable.length > 0) {
+    select.val(selectable.first().val());
+  }
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("crewShiftModal")).show();
+}
+
+function saveCrewShift() {
+  const slot = pickerSlot;
+  const crewId = parseInt($("#crewShiftModalCrew").val());
+  if (slot == null || isNaN(crewId)) {
+    showSimpleError("Choose a crew.");
+    return;
+  }
+  const body = {date: slot.date, type: slot.type, lineId: slot.lineId, crewId: crewId};
+  const request = slot.crewShiftId == null
+    ? send("POST", "/crew-schedules/crew-shifts", body)
+    : send("PUT", crewShiftUrl(slot.crewShiftId), body);
+  request.done(roster => {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("crewShiftModal")).hide();
+    onRosterChanged(roster);
+  }).fail(xhr => showError("Saving the crew shift failed.", xhr));
+}
+
+// vis-timeline callback after a drag. The timeline is drawn again from the server's answer.
+function moveCrewShift(item, callback) {
+  callback(null);
+  const body = {...slotOf(item.start), lineId: item.group, crewId: item.crewId};
+  send("PUT", crewShiftUrl(item.id), body)
+    .done(onRosterChanged)
+    .fail(xhr => showError("Moving the crew shift failed.", xhr));
+}
+
+// vis-timeline callback for the x of a selected shift
+function removeCrewShift(item, callback) {
+  callback(null);
+  send("DELETE", crewShiftUrl(item.id))
+    .done(onRosterChanged)
+    .fail(xhr => showError("Removing the crew shift failed.", xhr));
+}
+
+function togglePinned(itemId) {
+  const item = byLineItemDataSet.get(itemId);
+  if (item == null) {
+    return;
+  }
+  send("PUT", crewShiftUrl(item.id) + "/pinned", {pinned: !item.pinned})
+    .done(renderRoster)
+    .fail(xhr => showError("Pinning the crew shift failed.", xhr));
+}
+
+function clickedOn(event, selector) {
+  const target = event == null ? null : (event.target || (event.srcEvent && event.srcEvent.target));
+  return target != null && $(target).closest(selector).length > 0;
+}
+
+function crewShiftUrl(crewShiftId) {
+  return "/crew-schedules/crew-shifts/" + encodeURIComponent(crewShiftId);
 }
 
 // Gantt chart of the assignments: one row per employee, one bar per assigned position
@@ -224,8 +391,11 @@ function renderEmployees(schedule) {
   });
 }
 
-// Crew list: one accordion item per crew; the body lists all employees of the crew
+// Crew list: one accordion item per crew; the body has the composition and all employees of the crew.
+// Crews that were open stay open when the list is drawn again after a change.
 function renderCrews(crews) {
+  crewDetailsList = crews;
+  const openIds = new Set($("#crewList .accordion-collapse.show").map((i, element) => element.id).get());
   const crewList = $("#crewList").empty();
   const employeeCount = crews.reduce((sum, details) => sum + details.employees.length, 0);
   $("#crewCount").text(crews.length === 0 ? "" : `(${crews.length} crews, ${employeeCount} employees)`);
@@ -237,8 +407,11 @@ function renderCrews(crews) {
   $.each(crews, (index, details) => {
     const crew = details.crew;
     const bodyId = `crew-${crew.id}`;
+    const open = openIds.has(bodyId);
     const lineNames = details.lines.length === 0 ? "no line" : details.lines.map(line => line.name).join(", ");
-    const header = $(`<button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse"/>`)
+    const header = $(`<button class="accordion-button py-2" type="button" data-bs-toggle="collapse"/>`)
+      .toggleClass("collapsed", !open)
+      .attr("aria-expanded", String(open))
       .attr("data-bs-target", "#" + bodyId)
       .append($(`<span class="crew-color me-2"/>`).css("background-color", pickColor("crew" + crew.id)))
       .append($(`<strong class="me-3"/>`).text(crewName(crew)))
@@ -246,26 +419,104 @@ function renderCrews(crews) {
       .append($(`<span class="text-muted"/>`)
         .text(`${details.employees.length} employees, ${crew.staffCount} per shift`));
 
-    const rows = details.employees.map((employee, i) => $(`<tr/>`)
-      .append($(`<td/>`).text(i + 1))
-      .append($(`<td/>`).text(employee.id))
-      .append($(`<td/>`).text(employee.fullName))
-      .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", "))));
-    const body = details.employees.length === 0
-      ? $(`<p class="text-muted mb-0"/>`).text("No employees.")
-      : $(`<table class="table table-sm table-striped mb-0"/>`)
-        .append($(`<thead/>`).append($(`<tr/>`)
-          .append($(`<th style="width: 3rem"/>`).text("#"))
-          .append($(`<th style="width: 10rem"/>`).text("Personnel number"))
-          .append($(`<th/>`).text("Full name"))
-          .append($(`<th/>`).text("Roles"))))
-        .append($(`<tbody/>`).append(rows));
+    const body = $(`<div class="accordion-body py-2"/>`)
+      .append($(`<h4 class="h6"/>`).text("People per shift"))
+      .append(renderComposition(details))
+      .append($(`<h4 class="h6 mt-3"/>`).text("Employees"))
+      .append(renderCrewEmployees(details));
 
     crewList.append($(`<div class="accordion-item"/>`)
       .append($(`<h3 class="accordion-header"/>`).append(header))
-      .append($(`<div class="accordion-collapse collapse"/>`).attr("id", bodyId)
-        .append($(`<div class="accordion-body py-2"/>`).append(body))));
+      .append($(`<div class="accordion-collapse collapse"/>`).toggleClass("show", open).attr("id", bodyId)
+        .append(body)));
   });
+}
+
+// Roles of the crew with the number of people per shift (0 removes the role), and a row to add a role
+function renderComposition(details) {
+  const crew = details.crew;
+  const rows = details.roles.map(roleCount => $(`<tr/>`)
+    .append($(`<td/>`).text(roleCount.role.name))
+    .append($(`<td/>`).append($(`<input type="number" min="0" step="1" class="form-control form-control-sm role-count"/>`)
+      .val(roleCount.count)
+      .on("change", event => setRoleCount(crew.id, roleCount.role.id, $(event.target).val())))));
+
+  const usedRoleIds = new Set(details.roles.map(roleCount => roleCount.role.id));
+  const freeRoles = allRoles.filter(role => !usedRoleIds.has(role.id));
+  const roleSelect = $(`<select class="form-select form-select-sm d-inline-block w-auto me-2"/>`)
+    .append(freeRoles.map(role => $(`<option/>`).val(role.id).text(role.name)));
+  const countInput = $(`<input type="number" min="1" step="1" class="form-control form-control-sm d-inline-block role-count me-2"/>`)
+    .val(1);
+  const addButton = $(`<button type="button" class="btn btn-sm btn-outline-secondary"/>`)
+    .append($(`<span class="fas fa-plus"/>`)).append(" Add role")
+    .on("click", () => setRoleCount(crew.id, parseInt(roleSelect.val()), countInput.val()));
+  const addRow = freeRoles.length === 0 ? null : $(`<div class="mt-1"/>`).append(roleSelect, countInput, addButton);
+
+  const table = rows.length === 0
+    ? $(`<p class="text-muted mb-0"/>`).text("No roles: this crew needs nobody.")
+    : $(`<table class="table table-sm mb-0 w-auto"/>`)
+      .append($(`<thead/>`).append($(`<tr/>`)
+        .append($(`<th/>`).text("Role"))
+        .append($(`<th/>`).text("People"))))
+      .append($(`<tbody/>`).append(rows));
+  return $(`<div/>`).append(table, addRow);
+}
+
+// Employees of the crew; the crew column moves an employee to another crew
+function renderCrewEmployees(details) {
+  if (details.employees.length === 0) {
+    return $(`<p class="text-muted mb-0"/>`).text("No employees.");
+  }
+  const rows = details.employees.map((employee, i) => {
+    const crewSelect = $(`<select class="form-select form-select-sm"/>`)
+      .append(crewDetailsList.map(other => $(`<option/>`).val(other.crew.id).text(crewName(other.crew))))
+      .val(details.crew.id)
+      .on("change", event => moveEmployee(employee.id, parseInt($(event.target).val())));
+    return $(`<tr/>`)
+      .append($(`<td/>`).text(i + 1))
+      .append($(`<td/>`).text(employee.id))
+      .append($(`<td/>`).text(employee.fullName))
+      .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", ")))
+      .append($(`<td/>`).append(crewSelect));
+  });
+  return $(`<table class="table table-sm table-striped mb-0"/>`)
+    .append($(`<thead/>`).append($(`<tr/>`)
+      .append($(`<th style="width: 3rem"/>`).text("#"))
+      .append($(`<th style="width: 10rem"/>`).text("Personnel number"))
+      .append($(`<th/>`).text("Full name"))
+      .append($(`<th/>`).text("Roles"))
+      .append($(`<th style="width: 10rem"/>`).text("Crew"))))
+    .append($(`<tbody/>`).append(rows));
+}
+
+function setRoleCount(crewId, roleId, value) {
+  const count = Number(value);
+  if (isNaN(roleId) || value === "" || !Number.isInteger(count) || count < 0) {
+    showSimpleError("The number of people must be a whole number, 0 or more.");
+    renderCrews(crewDetailsList);
+    return;
+  }
+  send("PUT", `/crew-schedules/crews/${crewId}/roles/${roleId}`, {count: count})
+    .done(crews => {
+      renderCrews(crews);
+      refreshPositions();
+    })
+    .fail(xhr => {
+      showError("Changing the crew composition failed.", xhr);
+      renderCrews(crewDetailsList);
+    });
+}
+
+function moveEmployee(employeeId, crewId) {
+  send("PUT", `/crew-schedules/employees/${employeeId}/crew`, {crewId: crewId})
+    .done(crews => {
+      renderCrews(crews);
+      refreshPositions();
+    })
+    .fail(xhr => {
+      showError("Moving the employee failed.", xhr);
+      renderCrews(crewDetailsList);
+    });
 }
 
 function openCrewOfItem(itemDataSet, itemId) {
