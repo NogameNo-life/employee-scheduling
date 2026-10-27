@@ -41,7 +41,7 @@ Docker: `docker compose up -d --build` (настройки из `.env`).
 ### Переменные окружения
 
 | Переменная | Назначение |
-|------------|------------|
+| --- | --- |
 | `SPRING_PROFILES_ACTIVE` | `local` — вывод SQL; пусто для production |
 | `HTTP_PORT` | Порт HTTP (по умолчанию 8080) |
 | `APP_TIME_ZONE` | Часовой пояс завода для «сегодня» и «текущего месяца» (по умолчанию `Europe/Minsk`) |
@@ -56,7 +56,7 @@ Docker: `docker compose up -d --build` (настройки из `.env`).
 `org.acme.employeescheduling`:
 
 | Пакет | Содержимое |
-|-------|------------|
+| --- | --- |
 | `config` | `MesDataSourceConfig` (основной), `TabuDataSourceConfig`, `ClockConfig`, `CorsConfig`, `SessionHeader` |
 | `entity.plr`, `repository.plr` | JPA-сущности и репозитории базы MES |
 | `entity.tabu`, `repository.tabu` | JPA-сущности и репозитории базы TABU2 |
@@ -72,7 +72,7 @@ Docker: `docker compose up -d --build` (настройки из `.env`).
 ## База данных
 
 | Таблица | Сущность | Смысл |
-|---------|----------|-------|
+| --- | --- | --- |
 | `PLR_BR` | `PlrBr` | Бригада. `BRID` — номер бригады, `OBJ` — подразделение |
 | `PLR_ROLE` | `PlrRole` | Роль. `RLID` — номер роли |
 | `PLR_PLINES` | `PlrLines` | Линия |
@@ -91,7 +91,7 @@ Docker: `docker compose up -d --build` (настройки из `.env`).
 ## Доменная модель (`domain/`)
 
 | Класс | Описание |
-|-------|----------|
+| --- | --- |
 | `Line` | Линия |
 | `Crew` | Бригада. `staffCount` — сумма `NPERS` из `PLR_RLBR`; список `employees` (`@JsonIgnore`, т. к. бригада есть в каждой позиции) |
 | `Role` | Роль |
@@ -132,7 +132,7 @@ Id смены бригады — `дата-ТИП-idЛинии`, поэтому 
 `synchronized(schedule)` и превращает исключения в HTTP-ответы:
 
 | Исключение | HTTP |
-|------------|------|
+| --- | --- |
 | `NoSuchElementException` (нет такой смены, сотрудника, бригады, линии) | 404 |
 | `IllegalArgumentException` (неверный запрос, дата не в месяце версии) | 400 |
 | `IllegalStateException` (конфликт с графиком) | 409 |
@@ -161,7 +161,7 @@ Id смены бригады — `дата-ТИП-idЛинии`, поэтому 
 Изменения смен возвращают весь график по линиям (`RotationResponse`: `sessionId`, `versionId`, `month`, `lines`).
 
 | Метод | Путь | Тело | Назначение |
-|-------|------|------|------------|
+| --- | --- | --- | --- |
 | GET | `/crew-schedules` | | Вся версия: смены бригад, позиции, сотрудники |
 | GET | `/crew-schedules/rotation` | | Дневная и ночная бригада для каждой линии и дня |
 | GET | `/crew-schedules/crews` | | Бригады с линиями, ролями и числом людей (только чтение) и сотрудниками |
@@ -185,8 +185,7 @@ Id смены бригады — `дата-ТИП-idЛинии`, поэтому 
     Двойной щелчок по пустому месту — добавить (окно `crewShiftModal`), двойной щелчок по смене — поменять бригаду,
     перетаскивание — перенести (`snapToShiftStart`, привязка к 08:00/20:00), × — удалить, замок — закрепить.
     Щелчок по названию бригады или по числу людей открывает окно людей смены (`shiftPeopleModal`,
-    `openShiftPeopleDialog` / `renderShiftPeopleDialog`). Подсказка при наведении — список людей
-    (`renderShiftPeopleTitles`, поле `title` элемента).
+    `openShiftPeopleDialog` / `renderShiftPeopleDialog`).
   - **«By employee»** (`byEmployeeTimeline`): сотрудники по бригадам, данные из `GET /crew-schedules`.
     Двойной щелчок — окно `shiftEmployeeModal` (снять, заменить, вернуть, добавить).
 - Список бригад (`renderCrews`) из `GET /crew-schedules/crews`; смена бригады сотрудника — `moveEmployee`.
@@ -204,7 +203,7 @@ mvn test
 Тесты не требуют базы данных:
 
 | Тест | Что проверяет |
-|------|---------------|
+| --- | --- |
 | `CrewScheduleEditorTest` | Правила редактора |
 | `CrewScheduleFactoryTest` | Создание и копирование версий |
 | `CrewScheduleRepositoryTest` | Хранение версий |

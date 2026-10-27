@@ -84,7 +84,7 @@ $(document).ready(function () {
     byEmployeeTimeline.redraw();
   })
   // Click on a shift: the lock icon pins/unpins it, the crew name or the people icon opens the people of this
-  // shift. Hovering over a shift shows its people (the item title).
+  // shift.
   // A click elsewhere only selects the shift (to drag it or remove it with the x).
   byLineTimeline.on("click", props => {
     if (props.item == null) {
@@ -160,7 +160,6 @@ function refreshPositions() {
     const unassigned = schedule.positions.filter(position => position.employee == null).length;
     $("#unassignedPositions").text(`Unassigned positions: ${unassigned} / ${schedule.positions.length}`);
     renderEmployees(schedule);
-    renderShiftPeopleTitles(schedule);
     renderShiftPeopleDialog();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Getting the positions failed.", xhr);
@@ -475,24 +474,6 @@ function renderShiftPeopleDialog() {
     .append(free.length === 0 ? $(`<option value=""/>`).text("Nobody is free at that time") : null)
     .append(free.map(other => $(`<option/>`).val(other.id).text(`${other.fullName} (${crewName(other.crew)})`)));
   $("#shiftPeopleModalAddButton").prop("disabled", free.length === 0);
-}
-
-// Tooltip of every "By line" shift: its people (names come with the whole version, after the crew schedule)
-function renderShiftPeopleTitles(schedule) {
-  const employeesById = new Map(schedule.employees.map(employee => [employee.id, employee]));
-  const name = id => employeesById.has(id) ? employeesById.get(id).fullName : String(id);
-  const updates = schedule.crewShifts
-    .filter(crewShift => byLineItemDataSet.get(crewShift.id) != null)
-    .map(crewShift => {
-      const title = $(`<div/>`).append($(`<strong/>`).text(`${crewName(crewShift.crew)}: ${crewShift.employeeIds.length} people`));
-      crewShift.employeeIds.map(id => [name(id), crewShift.extraEmployeeIds.includes(id)])
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .forEach(([fullName, substitute]) => title.append($(`<div/>`).text(fullName + (substitute ? " (substitute)" : ""))));
-      crewShift.absentEmployeeIds.map(name).sort()
-        .forEach(fullName => title.append($(`<div class="text-muted text-decoration-line-through"/>`).text(fullName)));
-      return {id: crewShift.id, title: title.html()};
-    });
-  byLineItemDataSet.update(updates);
 }
 
 // The dialog stays open; it is drawn again when the new version is loaded (refreshPositions)
