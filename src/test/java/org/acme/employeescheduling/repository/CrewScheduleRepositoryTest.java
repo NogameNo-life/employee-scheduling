@@ -2,8 +2,6 @@ package org.acme.employeescheduling.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.List;
-
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.repository.CrewScheduleRepository.ScheduleVersion;
@@ -42,10 +40,10 @@ class CrewScheduleRepositoryTest {
         assertThat(repository.read("user1").schedule()).isSameAs(changed);
         assertThat(repository.read("user1").id()).isEqualTo(edited.id());
 
-        // The user generates a new version, then a late change to the old version arrives
-        ScheduleVersion generated = repository.create("user1", schedule());
+        // The user starts a new version, then a late change to the old version arrives
+        ScheduleVersion started = repository.create("user1", schedule());
         assertThat(repository.update("user1", edited.id(), schedule())).isFalse();
-        assertThat(repository.read("user1").schedule()).isSameAs(generated.schedule());
+        assertThat(repository.read("user1").schedule()).isSameAs(started.schedule());
     }
 
     @Test
@@ -72,6 +70,6 @@ class CrewScheduleRepositoryTest {
     }
 
     private static CrewSchedule schedule() {
-        return new CrewSchedule(List.of(), List.of(), List.of(), List.of(), List.of());
+        return new CrewSchedule();
     }
 }

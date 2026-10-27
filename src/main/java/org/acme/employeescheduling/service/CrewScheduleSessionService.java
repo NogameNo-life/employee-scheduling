@@ -2,6 +2,8 @@ package org.acme.employeescheduling.service;
 
 import java.time.Clock;
 import java.time.YearMonth;
+import java.util.NoSuchElementException;
+import java.util.function.Consumer;
 
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
@@ -17,8 +19,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Gives every user (X-Session-Id) their own schedule version, like ScheduleSessionService in
- * food-packaging-quarkus. The default version is generated at startup; a user without a version
- * gets a copy of it, so their changes don't affect anybody else.
+ * food-packaging-quarkus. The default version (current month, no crew shifts) is made at startup;
+ * a user without a version gets a copy of it, so their changes don't affect anybody else.
  */
 @Service
 public class CrewScheduleSessionService {
@@ -43,7 +45,7 @@ public class CrewScheduleSessionService {
     @EventListener(ApplicationReadyEvent.class)
     void onStart() {
         try {
-            // Lines first and on their own: the frontend shows them even if the schedule cannot be generated
+            // Lines first and on their own: the frontend shows them even if the crews cannot be loaded
             crewDataCache.refreshLines();
         } catch (RuntimeException e) {
             LOGGER.error("Could not load the lines at startup.", e);
@@ -52,11 +54,11 @@ public class CrewScheduleSessionService {
             init(SessionHeader.DEFAULT_SESSION_ID, YearMonth.now(clock));
         } catch (RuntimeException e) {
             // Keep the application running (e.g. the DB is not reachable); POST /crew-schedules/init retries.
-            LOGGER.error("Could not generate the default schedule version at startup.", e);
+            LOGGER.error("Could not create the default schedule version at startup.", e);
         }
     }
 
-    /** Generates a new version for {@code month} and makes it the version of the session. */
+    /** Makes a new version for {@code month} without crew shifts and makes it the version of the session. */
     public ScheduleVersion init(String sessionId, YearMonth month) {
         CrewSchedule schedule = rosterService.createVersion(month);
         ScheduleVersion version = repository.create(sessionId, schedule);
@@ -70,11 +72,35 @@ public class CrewScheduleSessionService {
             ScheduleVersion defaultVersion = repository.read(SessionHeader.DEFAULT_SESSION_ID);
             if (defaultVersion == null) {
                 throw new ScheduleException(sessionId, HttpStatus.NOT_FOUND,
-                        "No schedule version yet. Press Generate.");
+                        "No schedule version yet. Press New empty month.");
             }
-            CrewSchedule copy = scheduleFactory.copyOf(defaultVersion.schedule(), crewDataCache.getAll());
+            CrewSchedule copy;
+            synchronized (defaultVersion.schedule()) {
+                copy = scheduleFactory.copyOf(defaultVersion.schedule());
+            }
             LOGGER.info("Session {}: copy of the default schedule version.", sessionId);
             return copy;
         });
+    }
+
+    /**
+     * Changes the version of the session in place (see {@link CrewScheduleEditor}). Changes of one version
+     * run one after another. Errors of the change become a {@link ScheduleException}: unknown element 404,
+     * invalid request 400, conflict with the schedule 409.
+     */
+    public ScheduleVersion edit(String sessionId, Consumer<CrewSchedule> change) {
+        ScheduleVersion version = requireVersion(sessionId);
+        synchronized (version.schedule()) {
+            try {
+                change.accept(version.schedule());
+            } catch (NoSuchElementException e) {
+                throw new ScheduleException(sessionId, HttpStatus.NOT_FOUND, e.getMessage());
+            } catch (IllegalArgumentException e) {
+                throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, e.getMessage());
+            } catch (IllegalStateException e) {
+                throw new ScheduleException(sessionId, HttpStatus.CONFLICT, e.getMessage());
+            }
+        }
+        return version;
     }
 }
