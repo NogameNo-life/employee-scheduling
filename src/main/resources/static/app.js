@@ -47,6 +47,8 @@ let pickerSlot = null;
 let employeeDialog = null;
 // The crew shift whose people dialog is open (null: closed)
 let peopleDialogCrewShiftId = null;
+// The employee whose dialog (crew changes, absences) is open (null: closed)
+let employeeModalId = null;
 
 $(document).ready(function () {
   $("#newMonthButton").click(function () {
@@ -69,6 +71,23 @@ $(document).ready(function () {
     }
   });
   $("#shiftPeopleModal").on("hidden.bs.modal", () => peopleDialogCrewShiftId = null);
+  $("#shiftPeopleModalCompositionSave").click(saveShiftComposition);
+  $("#shiftPeopleModalCompositionReset").click(() =>
+    changeShiftPeople(send("DELETE", `${crewShiftUrl(peopleDialogCrewShiftId)}/composition`)));
+  $("#shiftPeopleModalAddRole").on("change", event => {
+    const roleId = parseInt($(event.target).val());
+    const role = lastSchedule == null ? null : lastSchedule.roles.find(r => r.id === roleId);
+    if (role != null) {
+      $("#shiftPeopleModalComposition tbody").append(compositionRow(role, 0, 0));
+      $(event.target).find(`option[value="${roleId}"]`).remove();
+    }
+    $(event.target).val("");
+  });
+  $("#employeeModal").on("hidden.bs.modal", () => employeeModalId = null);
+  $("#employeeModalCrewSave").click(saveEmployeeCrew);
+  $("#employeeModalAbsenceSave").click(saveAbsence);
+  $("#employeeModalAbsenceType").on("change", event =>
+    $("#employeeModalAbsenceTo").prop("disabled", $(event.target).val() === "DISMISSAL"));
   $("#shiftPeopleModalCrewButton").click(function () {
     const crewShift = lastSchedule == null ? null : lastSchedule.crewShifts.find(s => s.id === peopleDialogCrewShiftId);
     bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftPeopleModal")).hide();
@@ -97,7 +116,14 @@ $(document).ready(function () {
     }
   });
   byLineTimeline.on("doubleClick", onLineDoubleClick);
-  byEmployeeTimeline.on("click", props => openCrewOfItem(byEmployeeItemDataSet, props.item));
+  // Click on an employee's name: crew changes and absences; on a shift: the crew in the crew list
+  byEmployeeTimeline.on("click", props => {
+    if (props.what === "group-label" && typeof props.group === "number") {
+      openEmployeeDialog(props.group);
+    } else {
+      openCrewOfItem(byEmployeeItemDataSet, props.item);
+    }
+  });
   byEmployeeTimeline.on("doubleClick", onEmployeeDoubleClick);
 
   setupAjax();
@@ -161,6 +187,7 @@ function refreshPositions() {
     $("#unassignedPositions").text(`Unassigned positions: ${unassigned} / ${schedule.positions.length}`);
     renderEmployees(schedule);
     renderShiftPeopleDialog();
+    renderEmployeeDialog();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Getting the positions failed.", xhr);
   });
@@ -232,15 +259,18 @@ function addCrewShiftItem(crewShift) {
   const pin = $(`<span class="pin-toggle fas me-1"/>`)
     .addClass(crewShift.pinned ? "fa-lock" : "fa-lock-open")
     .attr("title", crewShift.pinned ? "Pinned. Click to unpin." : "Click to pin.");
-  // People of this shift; "(-1, +1)" when it differs from the crew (absent employees, substitutes)
+  // People of this shift / people needed; "(-1, +1)" when it differs from the crew (absent or on an absence,
+  // substitutes); "*" when the number of people needed was changed for this shift
   const changes = [];
-  if (crewShift.absentEmployeeIds.length > 0) {
-    changes.push(`\u2212${crewShift.absentEmployeeIds.length}`);
+  const missing = crewShift.absentEmployeeIds.length + crewShift.unavailableEmployeeIds.length;
+  if (missing > 0) {
+    changes.push(`\u2212${missing}`);
   }
   if (crewShift.extraEmployeeIds.length > 0) {
     changes.push(`+${crewShift.extraEmployeeIds.length}`);
   }
-  const people = `${crewShift.employeeIds.length} people` + (changes.length === 0 ? "" : ` (${changes.join(", ")})`);
+  const people = `${crewShift.employeeIds.length} / ${crewShift.staffCount}${crewShift.roleCounts == null ? "" : "*"} people`
+    + (changes.length === 0 ? "" : ` (${changes.join(", ")})`);
   const element = $(`<div class="card-body p-2"/>`)
     .append($(`<h5 class="card-title mb-1"/>`).append(pin)
       .append($(`<span class="crew-link"/>`).text(crewName(crew))))
@@ -421,26 +451,39 @@ function renderShiftPeopleDialog() {
   const employeesById = new Map(lastSchedule.employees.map(employee => [employee.id, employee]));
   // Absent employees of this shift are not offered here: they have "Works again"
   const free = freeEmployees(crewShift.date, crewShift.type).filter(e => !crewShift.absentEmployeeIds.includes(e.id));
-  $("#shiftPeopleModalTitle").text(`People of the crew shift (${crewShift.employeeIds.length})`);
+  $("#shiftPeopleModalTitle").text(`People of the crew shift (${crewShift.employeeIds.length} / ${crewShift.staffCount})`);
   $("#shiftPeopleModalSlot").text(describeShift(crewShift));
 
-  // Working employees first (crew members, then substitutes), then the absent ones; by name within each
-  const status = id => crewShift.absentEmployeeIds.includes(id) ? 2 : (crewShift.extraEmployeeIds.includes(id) ? 1 : 0);
-  const ids = [...crewShift.employeeIds, ...crewShift.absentEmployeeIds]
+  // Working employees first (crew members, then substitutes), then the absent ones, then the ones on an absence
+  // (vacation, sick leave, dismissal); by name within each
+  const status = id => crewShift.unavailableEmployeeIds.includes(id) ? 3
+    : crewShift.absentEmployeeIds.includes(id) ? 2 : (crewShift.extraEmployeeIds.includes(id) ? 1 : 0);
+  const ids = [...new Set([...crewShift.employeeIds, ...crewShift.absentEmployeeIds, ...crewShift.unavailableEmployeeIds])]
     .filter(id => employeesById.has(id))
     .sort((a, b) => status(a) - status(b) || employeesById.get(a).fullName.localeCompare(employeesById.get(b).fullName));
   const url = crewShiftUrl(crewShift.id);
   const rows = ids.map((id, i) => {
     const employee = employeesById.get(id);
-    const absent = status(id) === 2;
+    const absent = status(id) >= 2;
     const actions = $(`<td class="text-nowrap"/>`);
-    if (absent) {
+    let statusText;
+    if (status(id) === 3) {
+      const absence = absenceOn(employee, crewShift.date);
+      statusText = absence == null ? "absent" : absenceName(absence.type);
+      actions.append($(`<button type="button" class="btn btn-sm btn-outline-secondary"/>`).text("Absences...")
+        .click(() => {
+          bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftPeopleModal")).hide();
+          openEmployeeDialog(id);
+        }));
+    } else if (absent) {
+      statusText = "absent";
       actions.append($(`<button type="button" class="btn btn-sm btn-outline-primary"/>`).text("Works again")
         .click(() => changeShiftPeople(send("PUT", `${url}/employees/${id}`))));
     } else {
+      statusText = status(id) === 1 ? `substitute (${crewName(crewOn(employee, crewShift.date))})` : "crew";
       const replace = $(`<select class="form-select form-select-sm d-inline-block w-auto me-1"/>`)
         .append($(`<option value=""/>`).text("Replace by..."))
-        .append(free.map(other => $(`<option/>`).val(other.id).text(`${other.fullName} (${crewName(other.crew)})`)))
+        .append(free.map(other => employeeOption(other, crewShift.date)))
         .prop("disabled", free.length === 0)
         .on("change", event => {
           const substituteId = parseInt($(event.target).val());
@@ -456,7 +499,7 @@ function renderShiftPeopleDialog() {
       .append($(`<td/>`).text(i + 1))
       .append($(`<td/>`).text(employee.fullName).toggleClass("text-decoration-line-through", absent))
       .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", ")))
-      .append($(`<td/>`).text(absent ? "absent" : status(id) === 1 ? `substitute (${crewName(employee.crew)})` : "crew"))
+      .append($(`<td/>`).text(statusText))
       .append(actions);
   });
   $("#shiftPeopleModalList").empty().append(rows.length === 0
@@ -472,8 +515,62 @@ function renderShiftPeopleDialog() {
 
   $("#shiftPeopleModalAdd").empty()
     .append(free.length === 0 ? $(`<option value=""/>`).text("Nobody is free at that time") : null)
-    .append(free.map(other => $(`<option/>`).val(other.id).text(`${other.fullName} (${crewName(other.crew)})`)));
+    .append(free.map(other => employeeOption(other, crewShift.date)));
   $("#shiftPeopleModalAddButton").prop("disabled", free.length === 0);
+  renderShiftComposition(crewShift);
+}
+
+// People needed per role in this shift: the crew's numbers (PLR_RLBR), or the numbers changed for this shift only
+function renderShiftComposition(crewShift) {
+  const details = crewDetailsList.find(d => d.crew.id === crewShift.crew.id);
+  const crewCounts = new Map((details == null ? [] : details.roles).map(roleCount => [roleCount.role.id, roleCount.count]));
+  const shiftCounts = crewShift.roleCounts == null ? crewCounts
+    : new Map(Object.entries(crewShift.roleCounts).map(([roleId, count]) => [parseInt(roleId), count]));
+  const rolesById = new Map(lastSchedule.roles.map(role => [role.id, role]));
+  const roleIds = [...new Set([...crewCounts.keys(), ...shiftCounts.keys()])].filter(id => rolesById.has(id))
+    .sort((a, b) => rolesById.get(a).name.localeCompare(rolesById.get(b).name));
+
+  $("#shiftPeopleModalCompositionText").text(crewShift.roleCounts == null
+    ? "The crew's numbers. Change them here for this shift only."
+    : "Changed for this shift only (the crew's numbers are in the second column).");
+  $("#shiftPeopleModalComposition").empty().append($(`<table class="table table-sm align-middle mb-0 w-auto"/>`)
+    .append($(`<thead/>`).append($(`<tr/>`)
+      .append($(`<th/>`).text("Role"))
+      .append($(`<th/>`).text("Crew"))
+      .append($(`<th/>`).text("This shift"))))
+    .append($(`<tbody/>`).append(roleIds.map(id =>
+      compositionRow(rolesById.get(id), crewCounts.get(id) || 0, shiftCounts.get(id) || 0)))));
+  $("#shiftPeopleModalAddRole").empty()
+    .append($(`<option value=""/>`).text("Add a role..."))
+    .append(lastSchedule.roles.filter(role => !roleIds.includes(role.id))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(role => $(`<option/>`).val(role.id).text(role.name)));
+  $("#shiftPeopleModalCompositionReset").prop("disabled", crewShift.roleCounts == null);
+}
+
+function compositionRow(role, crewCount, shiftCount) {
+  return $(`<tr/>`)
+    .append($(`<td/>`).text(role.name))
+    .append($(`<td/>`).text(crewCount))
+    .append($(`<td/>`).append($(`<input type="number" min="0" max="50" class="form-control form-control-sm role-count"/>`)
+      .attr("data-role-id", role.id).val(shiftCount)));
+}
+
+function saveShiftComposition() {
+  const roles = [];
+  let valid = true;
+  $("#shiftPeopleModalComposition input[data-role-id]").each((i, input) => {
+    const count = Number($(input).val());
+    if (!Number.isInteger(count) || count < 0) {
+      valid = false;
+    }
+    roles.push({roleId: parseInt($(input).attr("data-role-id")), count: count});
+  });
+  if (!valid) {
+    showSimpleError("The number of people must be a whole number, 0 or more.");
+    return;
+  }
+  changeShiftPeople(send("PUT", `${crewShiftUrl(peopleDialogCrewShiftId)}/composition`, {roles: roles}));
 }
 
 // The dialog stays open; it is drawn again when the new version is loaded (refreshPositions)
@@ -494,6 +591,7 @@ function renderEmployees(schedule) {
   byEmployeeGroupDataSet.clear();
   byEmployeeItemDataSet.clear();
 
+  const employeesById = new Map(schedule.employees.map(employee => [employee.id, employee]));
   const employeesByCrew = new Map();
   $.each(schedule.employees, (index, employee) => {
     if (!employeesByCrew.has(employee.crew.id)) {
@@ -527,8 +625,10 @@ function renderEmployees(schedule) {
         byEmployeeGroupDataSet.add({
           id: employee.id, order: order++,
           content: $(`<div/>`)
-            .append($(`<div/>`).text(employee.fullName))
+            .append($(`<div class="employee-link"/>`).text(employee.fullName))
             .append(roles ? $(`<div class="small"/>`).text(roles) : null)
+            .append(employee.crewChanges.map(change =>
+              $(`<div class="small"/>`).text(`\u2192 ${crewName(change.crew)} from ${change.from}`)))
             .append($(`<div class="text-muted small"/>`)
               .text(`${shiftCount.get(employee.id) || 0} shifts, ${hourCount.get(employee.id) || 0} h`)).html()
         });
@@ -543,17 +643,34 @@ function renderEmployees(schedule) {
         ? `${crewName(crew)}, substitute` : crewName(crew));
     });
     crewShift.absentEmployeeIds.forEach(employeeId => addEmployeeShiftItem(crewShift, employeeId, true, "absent"));
+    crewShift.unavailableEmployeeIds.forEach(employeeId => {
+      const employee = employeesById.get(employeeId);
+      const absence = employee == null ? null : absenceOn(employee, crewShift.date);
+      addEmployeeShiftItem(crewShift, employeeId, true, absence == null ? "absent" : absenceName(absence.type), true);
+    });
+  });
+
+  // Absences as a red background in the employee's row (a dismissal up to the end of the month)
+  const monthEnd = JSJoda.YearMonth.parse(schedule.month).atEndOfMonth().toString();
+  $.each(schedule.employees, (index, employee) => {
+    employee.absences.forEach(absence => byEmployeeItemDataSet.add({
+      id: `absence-${absence.id}`, group: employee.id, type: "background", className: "absence",
+      content: $(`<div/>`).append($(`<span class="small"/>`).text(absenceName(absence.type))).html(),
+      start: absence.from,
+      end: JSJoda.LocalDate.parse(absence.to == null || absence.to > monthEnd ? monthEnd : absence.to).plusDays(1).toString()
+    }));
   });
 }
 
-function addEmployeeShiftItem(crewShift, employeeId, absent, text) {
+// unavailable: on an absence (vacation, sick leave, dismissal), changed in the employee dialog
+function addEmployeeShiftItem(crewShift, employeeId, absent, text, unavailable = false) {
   const substitute = crewShift.extraEmployeeIds.includes(employeeId);
   const element = $(`<div class="card-body p-2"/>`)
     .append($(`<h5 class="card-title mb-1"/>`).text(crewShift.line.name))
     .append($(`<p class="card-text ms-2 mb-0"/>`).text(text));
   byEmployeeItemDataSet.add({
     id: `${crewShift.id}/${employeeId}`, group: employeeId, crewId: crewShift.crew.id,
-    crewShiftId: crewShift.id, employeeId: employeeId, absent: absent,
+    crewShiftId: crewShift.id, employeeId: employeeId, absent: absent, unavailable: unavailable,
     className: absent ? "absent" : (substitute ? "substitute" : ""),
     content: element.html(),
     start: crewShift.start, end: crewShift.end,
@@ -569,7 +686,9 @@ function onEmployeeDoubleClick(props) {
   }
   if (props.item != null) {
     const item = byEmployeeItemDataSet.get(props.item);
-    if (item != null) {
+    if (item != null && item.unavailable) {
+      openEmployeeDialog(item.employeeId);
+    } else if (item != null && item.crewShiftId != null) {
       openShiftEmployeeDialog(item.absent ? "absent" : "works", item.employeeId, item.crewShiftId);
     }
     return;
@@ -578,6 +697,12 @@ function onEmployeeDoubleClick(props) {
     return; // Not an employee row (e.g. a crew row)
   }
   const slot = slotOf(props.time);
+  const employee = lastSchedule.employees.find(e => e.id === props.group);
+  const absence = employee == null ? null : absenceOn(employee, slot.date);
+  if (absence != null) {
+    showSimpleError(`${employee.fullName} is absent (${absenceName(absence.type)}) on ${slot.date}.`);
+    return;
+  }
   const crewShifts = lastSchedule.crewShifts.filter(crewShift => crewShift.date === slot.date && crewShift.type === slot.type);
   if (crewShifts.length === 0) {
     showSimpleError(`No crew works on ${slot.date}, ${shiftName(slot.type)}. Add a crew shift in "By line" first.`);
@@ -603,7 +728,7 @@ function openShiftEmployeeDialog(mode, employeeId, crewShiftId, crewShifts) {
     $("#shiftEmployeeModalSelectLabel").text("Replaced by");
     select.append($(`<option value=""/>`).text("Nobody (one person less)"));
     freeEmployees(crewShift.date, crewShift.type)
-      .forEach(other => select.append($(`<option/>`).val(other.id).text(`${other.fullName} (${crewName(other.crew)})`)));
+      .forEach(other => select.append(employeeOption(other, crewShift.date)));
   } else if (mode === "absent") {
     $("#shiftEmployeeModalText").text(`Does not work on ${describeShift(crewShift)} (absent).`);
   } else {
@@ -657,15 +782,131 @@ function saveShiftEmployee() {
   }).fail(xhr => showError("Changing the people of the crew shift failed.", xhr));
 }
 
-// Employees who do not work any crew shift on this date and shift, sorted by crew and name
+// Employees who do not work any crew shift on this date and shift and are not absent, sorted by crew and name
 function freeEmployees(date, type) {
   const busy = new Set();
   lastSchedule.crewShifts
     .filter(crewShift => crewShift.date === date && crewShift.type === type)
     .forEach(crewShift => crewShift.employeeIds.forEach(id => busy.add(id)));
   return lastSchedule.employees
-    .filter(employee => !busy.has(employee.id))
-    .sort((a, b) => a.crew.id - b.crew.id || a.fullName.localeCompare(b.fullName));
+    .filter(employee => !busy.has(employee.id) && absenceOn(employee, date) == null)
+    .sort((a, b) => crewOn(a, date).id - crewOn(b, date).id || a.fullName.localeCompare(b.fullName));
+}
+
+function employeeOption(employee, date) {
+  return $(`<option/>`).val(employee.id).text(`${employee.fullName} (${crewName(crewOn(employee, date))})`);
+}
+
+// The crew of the employee on a date (yyyy-MM-dd): the crew of the month start, or of the last change up to then
+function crewOn(employee, date) {
+  let crew = employee.crew;
+  employee.crewChanges.forEach(change => {
+    if (change.from <= date) {
+      crew = change.crew;
+    }
+  });
+  return crew;
+}
+
+// The absence (vacation, sick leave, dismissal) of the employee on a date, or undefined. ISO dates compare as strings.
+function absenceOn(employee, date) {
+  return employee.absences.find(absence => absence.from <= date && (absence.to == null || date <= absence.to));
+}
+
+const ABSENCE_NAMES = {VACATION: "vacation", SICK_LEAVE: "sick leave", DISMISSAL: "dismissed", OTHER: "absent"};
+
+function absenceName(type) {
+  return ABSENCE_NAMES[type] || type;
+}
+
+function describeAbsence(absence) {
+  return `${absenceName(absence.type)}: ` + (absence.to == null ? `from ${absence.from}` : `${absence.from} - ${absence.to}`);
+}
+
+// Employee dialog: the crew of the employee by date (moves from a date) and their absences
+function openEmployeeDialog(employeeId) {
+  if (lastSchedule == null || !lastSchedule.employees.some(e => e.id === employeeId)) {
+    return;
+  }
+  employeeModalId = employeeId;
+  const month = JSJoda.YearMonth.parse(lastSchedule.month);
+  const first = month.atDay(1).toString();
+  const last = month.atEndOfMonth().toString();
+  $("#employeeModalCrewFrom").attr({min: first, max: last}).val("");
+  $("#employeeModalAbsenceFrom").attr({max: last}).val("");
+  $("#employeeModalAbsenceTo").attr({min: first}).val("");
+  $("#employeeModalAbsenceType").val("VACATION");
+  $("#employeeModalAbsenceTo").prop("disabled", false);
+  renderEmployeeDialog();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("employeeModal")).show();
+}
+
+// Draws the open employee dialog again (also after every change, from the new version)
+function renderEmployeeDialog() {
+  if (employeeModalId == null || lastSchedule == null) {
+    return;
+  }
+  const employee = lastSchedule.employees.find(e => e.id === employeeModalId);
+  if (employee == null) {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("employeeModal")).hide();
+    return;
+  }
+  const first = JSJoda.YearMonth.parse(lastSchedule.month).atDay(1).toString();
+  $("#employeeModalTitle").text(`${employee.fullName} (${employee.id})`);
+  $("#employeeModalRoles").text(employee.roles.length === 0 ? "No roles"
+    : "Roles: " + employee.roles.map(role => role.name).sort().join(", "));
+
+  $("#employeeModalCrews").empty()
+    .append($(`<li/>`).text(`From ${first}: ${crewName(employee.crew)}`))
+    .append(employee.crewChanges.map(change => $(`<li/>`)
+      .append($(`<span class="me-2"/>`).text(`From ${change.from}: ${crewName(change.crew)}`))
+      .append($(`<button type="button" class="btn btn-sm btn-outline-danger py-0"/>`).text("Remove")
+        .click(() => send("DELETE", `/crew-schedules/employees/${employee.id}/crew-changes/${change.from}`)
+          .done(refreshSchedule)
+          .fail(xhr => showError("Removing the crew change failed.", xhr))))));
+  const select = $("#employeeModalCrew").empty()
+    .append([...lastSchedule.crews].sort((a, b) => a.id - b.id).map(crew => $(`<option/>`).val(crew.id).text(crewName(crew))));
+  select.val(crewOn(employee, JSJoda.YearMonth.parse(lastSchedule.month).atEndOfMonth().toString()).id);
+
+  $("#employeeModalAbsences").empty().append(employee.absences.length === 0
+    ? $(`<li class="text-muted"/>`).text("No absences.")
+    : employee.absences.map(absence => $(`<li/>`)
+      .append($(`<span class="me-2"/>`).text(describeAbsence(absence)))
+      .append($(`<button type="button" class="btn btn-sm btn-outline-danger py-0"/>`).text("Remove")
+        .click(() => send("DELETE", `/crew-schedules/employees/${employee.id}/absences/${encodeURIComponent(absence.id)}`)
+          .done(onRosterChanged)
+          .fail(xhr => showError("Removing the absence failed.", xhr))))));
+}
+
+function saveEmployeeCrew() {
+  const crewId = parseInt($("#employeeModalCrew").val());
+  const from = $("#employeeModalCrewFrom").val();
+  if (employeeModalId == null || isNaN(crewId)) {
+    return;
+  }
+  // No date: the crew for the whole month
+  send("PUT", `/crew-schedules/employees/${employeeModalId}/crew`, {crewId: crewId, from: from || null})
+    .done(refreshSchedule)
+    .fail(xhr => showError("Moving the employee failed.", xhr));
+}
+
+function saveAbsence() {
+  const type = $("#employeeModalAbsenceType").val();
+  const from = $("#employeeModalAbsenceFrom").val();
+  const to = type === "DISMISSAL" ? null : $("#employeeModalAbsenceTo").val();
+  if (employeeModalId == null) {
+    return;
+  }
+  if (!from || (type !== "DISMISSAL" && !to)) {
+    showSimpleError(type === "DISMISSAL" ? "Enter the first day without work." : "Enter the first and the last day.");
+    return;
+  }
+  send("POST", `/crew-schedules/employees/${employeeModalId}/absences`, {type: type, from: from, to: to})
+    .done(roster => {
+      $("#employeeModalAbsenceFrom, #employeeModalAbsenceTo").val("");
+      onRosterChanged(roster);
+    })
+    .fail(xhr => showError("Adding the absence failed.", xhr));
 }
 
 function describeShift(crewShift) {
@@ -731,7 +972,8 @@ function renderComposition(details) {
       .append($(`<td/>`).text(roleCount.count)))));
 }
 
-// Employees of the crew (its default composition); the crew column moves an employee to another crew
+// Employees of the crew at the start of the month; the crew column moves an employee to another crew for the whole
+// month, the name opens the employee dialog (crew change from a date, absences)
 function renderCrewEmployees(details) {
   if (details.employees.length === 0) {
     return $(`<p class="text-muted mb-0"/>`).text("No employees.");
@@ -741,11 +983,16 @@ function renderCrewEmployees(details) {
       .append(crewDetailsList.map(other => $(`<option/>`).val(other.crew.id).text(crewName(other.crew))))
       .val(details.crew.id)
       .on("change", event => moveEmployee(employee.id, parseInt($(event.target).val())));
+    const changes = [
+      ...employee.crewChanges.map(change => `\u2192 ${crewName(change.crew)} from ${change.from}`),
+      ...employee.absences.map(describeAbsence)];
     return $(`<tr/>`)
       .append($(`<td/>`).text(i + 1))
       .append($(`<td/>`).text(employee.id))
-      .append($(`<td/>`).text(employee.fullName))
+      .append($(`<td/>`).append($(`<span class="employee-link"/>`).text(employee.fullName)
+        .click(() => openEmployeeDialog(employee.id))))
       .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", ")))
+      .append($(`<td class="small"/>`).append(changes.map(text => $(`<div/>`).text(text))))
       .append($(`<td/>`).append(crewSelect));
   });
   return $(`<table class="table table-sm table-striped mb-0"/>`)
@@ -754,16 +1001,14 @@ function renderCrewEmployees(details) {
       .append($(`<th style="width: 10rem"/>`).text("Personnel number"))
       .append($(`<th/>`).text("Full name"))
       .append($(`<th/>`).text("Roles"))
-      .append($(`<th style="width: 10rem"/>`).text("Crew"))))
+      .append($(`<th/>`).text("Crew changes, absences"))
+      .append($(`<th style="width: 10rem"/>`).text("Crew (whole month)"))))
     .append($(`<tbody/>`).append(rows));
 }
 
 function moveEmployee(employeeId, crewId) {
   send("PUT", `/crew-schedules/employees/${employeeId}/crew`, {crewId: crewId})
-    .done(crews => {
-      renderCrews(crews);
-      refreshPositions();
-    })
+    .done(refreshSchedule)
     .fail(xhr => {
       showError("Moving the employee failed.", xhr);
       renderCrews(crewDetailsList);

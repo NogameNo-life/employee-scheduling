@@ -7,7 +7,7 @@ import java.util.function.Supplier;
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Repository;
 
 /**
  * Schedule versions kept in memory, one per user session (X-Session-Id).
@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  * Every new version (startup, "Generate", copy of the default) gets a new version id. {@link #update} only
  * changes the version it was given, so a late change never overwrites a newer version.
  */
-@Component
+@Repository 
 public class CrewScheduleRepository {
 
     private static final long MAX_IDLE_MILLIS = 24 * 60 * 60 * 1000L;

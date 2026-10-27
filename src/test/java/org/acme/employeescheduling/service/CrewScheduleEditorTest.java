@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 
+import org.acme.employeescheduling.domain.Absence;
+import org.acme.employeescheduling.domain.AbsenceType;
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
@@ -18,6 +20,7 @@ import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.domain.Position;
 import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.domain.ShiftType;
+import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -231,6 +234,128 @@ class CrewScheduleEditorTest {
         assertThat(crew(2).getEmployees()).extracting(Employee::getId).containsExactlyInAnyOrder(100, 200);
         assertThat(position.getEmployee()).isNull();
         assertThat(position.isPinned()).isFalse();
+    }
+
+    @Test
+    void employeeChangesCrewFromADate() {
+        LocalDate day10 = DAY1.plusDays(9);
+        CrewShift before = editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 2));
+        CrewShift after = editor.addCrewShift(schedule, request(day10, ShiftType.DAY, "L1", 2));
+        CrewShift oldCrewAfter = editor.addCrewShift(schedule, request(day10, ShiftType.NIGHT, "L1", 1));
+
+        editor.moveEmployee(schedule, 100, 2, day10);
+
+        Employee anna = employee(100);
+        assertThat(anna.getCrew()).as("crew at the start of the month").isSameAs(crew(1));
+        assertThat(anna.getCrewOn(day10.minusDays(1))).isSameAs(crew(1));
+        assertThat(anna.getCrewOn(day10)).isSameAs(crew(2));
+        assertThat(before.getEmployeeIds()).containsExactly(200);
+        assertThat(after.getEmployeeIds()).containsExactly(100, 200);
+        assertThat(oldCrewAfter.getEmployeeIds()).isEmpty();
+        // A crew shift added later uses the crew of its date too
+        CrewShift added = editor.addCrewShift(schedule, request(day10.plusDays(1), ShiftType.DAY, "L2", 1));
+        assertThat(added.getEmployeeIds()).isEmpty();
+
+        editor.removeCrewChange(schedule, 100, day10);
+        assertThat(after.getEmployeeIds()).containsExactly(200);
+        assertThat(crew(2).getEmployees()).extracting(Employee::getId).containsExactly(200);
+        assertThatThrownBy(() -> editor.removeCrewChange(schedule, 100, day10))
+                .isInstanceOf(NoSuchElementException.class);
+        assertThatThrownBy(() -> editor.moveEmployee(schedule, 100, 2, DAY1.minusDays(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void crewChangeToTheSameCrewIsNotKept() {
+        editor.moveEmployee(schedule, 100, 2, DAY1.plusDays(5));
+        editor.moveEmployee(schedule, 100, 1, DAY1.plusDays(10));
+        assertThat(employee(100).getCrewChanges()).hasSize(2);
+
+        editor.moveEmployee(schedule, 100, 1, DAY1.plusDays(5));
+        assertThat(employee(100).getCrewChanges()).isEmpty();
+        assertThat(crew(2).getEmployees()).extracting(Employee::getId).containsExactly(200);
+    }
+
+    @Test
+    void absentEmployeeWorksNoShiftInThePeriod() {
+        CrewShift day1 = editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+        CrewShift day3 = editor.addCrewShift(schedule, request(DAY1.plusDays(2), ShiftType.NIGHT, "L1", 1));
+        CrewShift day4 = editor.addCrewShift(schedule, request(DAY1.plusDays(3), ShiftType.DAY, "L1", 1));
+
+        Absence absence = editor.addAbsence(schedule, 100,
+                new AbsenceRequest(AbsenceType.SICK_LEAVE, DAY1, DAY1.plusDays(2)));
+
+        assertThat(day1.getEmployeeIds()).isEmpty();
+        assertThat(day1.getUnavailableEmployeeIds()).containsExactly(100);
+        assertThat(day3.getEmployeeIds()).isEmpty();
+        assertThat(day4.getEmployeeIds()).containsExactly(100);
+        assertThatThrownBy(() -> editor.addEmployeeToShift(schedule, day1.getId(), 100))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("SICK_LEAVE");
+        assertThatThrownBy(() -> editor.addAbsence(schedule, 100,
+                new AbsenceRequest(AbsenceType.VACATION, DAY1.plusDays(2), DAY1.plusDays(5))))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("already has an absence");
+
+        editor.removeAbsence(schedule, 100, absence.id());
+        assertThat(day1.getEmployeeIds()).containsExactly(100);
+    }
+
+    @Test
+    void dismissalHasNoEnd() {
+        CrewShift last = editor.addCrewShift(schedule, request(DAY1.plusDays(29), ShiftType.NIGHT, "L1", 1));
+
+        Absence dismissal = editor.addAbsence(schedule, 100,
+                new AbsenceRequest(AbsenceType.DISMISSAL, DAY1.plusDays(20), DAY1.plusDays(21)));
+
+        assertThat(dismissal.to()).isNull();
+        assertThat(last.getEmployeeIds()).isEmpty();
+        assertThatThrownBy(() -> editor.addAbsence(schedule, 100,
+                new AbsenceRequest(AbsenceType.VACATION, DAY1, null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> editor.addAbsence(schedule, 100,
+                new AbsenceRequest(AbsenceType.VACATION, DAY1.plusMonths(1), DAY1.plusMonths(1).plusDays(1))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not in 2026-11");
+    }
+
+    @Test
+    void absenceClearsThePositionsOfTheEmployee() {
+        editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+        Position position = schedule.getPositions().get(0);
+        position.setEmployee(employee(100));
+
+        editor.addAbsence(schedule, 100, new AbsenceRequest(AbsenceType.VACATION, DAY1, DAY1));
+
+        assertThat(position.getEmployee()).isNull();
+    }
+
+    @Test
+    void crewSizeCanBeChangedForOneShift() {
+        CrewShift crewShift = editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+        CrewShift other = editor.addCrewShift(schedule, request(DAY1, ShiftType.NIGHT, "L1", 1));
+        Position kept = schedule.getPositions().stream()
+                .filter(position -> position.getCrewShift().equals(crewShift)).findFirst().orElseThrow();
+        kept.setEmployee(employee(100));
+
+        editor.setShiftComposition(schedule, crewShift.getId(), Map.of(10, 3));
+
+        assertThat(crewShift.getRoleCounts()).containsExactly(Map.entry(10, 3));
+        assertThat(positionsOf(crewShift)).hasSize(3);
+        assertThat(positionsOf(crewShift)).filteredOn(position -> position.getId().equals(kept.getId()))
+                .singleElement().satisfies(position -> assertThat(position.getEmployee()).isSameAs(employee(100)));
+        assertThat(positionsOf(other)).as("other shifts keep the crew's composition").hasSize(2);
+
+        // Same as the crew's composition: no change is kept
+        editor.setShiftComposition(schedule, crewShift.getId(), Map.of(10, 2));
+        assertThat(crewShift.getComposition()).isNull();
+        assertThat(positionsOf(crewShift)).hasSize(2);
+
+        assertThatThrownBy(() -> editor.setShiftComposition(schedule, crewShift.getId(), Map.of(10, -1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> editor.setShiftComposition(schedule, crewShift.getId(), Map.of(99, 1)))
+                .isInstanceOf(NoSuchElementException.class);
+    }
+
+    private List<Position> positionsOf(CrewShift crewShift) {
+        return schedule.getPositions().stream().filter(position -> position.getCrewShift().equals(crewShift)).toList();
     }
 
     private static CrewShiftRequest request(LocalDate date, ShiftType type, String lineId, Integer crewId) {

@@ -138,6 +138,47 @@ class CrewScheduleControllerTest {
     }
 
     @Test
+    void absencesCrewChangesAndShiftCompositionForOneShift() throws Exception {
+        mvc.perform(json(post("/crew-schedules/crew-shifts"), shift("DAY", 1))).andExpect(status().isOk());
+
+        // Vacation: Anna does not work the shift of her crew
+        mvc.perform(json(post("/crew-schedules/employees/100/absences"),
+                "{\"type\": \"VACATION\", \"from\": \"2026-11-02\", \"to\": \"2026-11-04\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds", hasSize(0)))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.unavailableEmployeeIds[0]").value(100));
+        mvc.perform(get("/crew-schedules"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.employees[0].absences[0].type").value("VACATION"))
+                .andExpect(jsonPath("$.employees[0].absences[0].to").value("2026-11-04"));
+        mvc.perform(json(post("/crew-schedules/employees/100/absences"),
+                "{\"type\": \"SICK_LEAVE\", \"from\": \"2026-11-04\", \"to\": \"2026-11-05\"}"))
+                .andExpect(status().isConflict());
+
+        // Boris moves to crew 1 from the 3rd
+        mvc.perform(json(put("/crew-schedules/employees/200/crew"), "{\"crewId\": 1, \"from\": \"2026-11-03\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[1].employees[0].crew.id").value(2))
+                .andExpect(jsonPath("$[1].employees[0].crewChanges[0].from").value("2026-11-03"))
+                .andExpect(jsonPath("$[1].employees[0].crewChanges[0].crew.id").value(1));
+        mvc.perform(get("/crew-schedules/rotation"))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds[0]").value(200));
+        mvc.perform(delete("/crew-schedules/employees/200/crew-changes/2026-11-03")).andExpect(status().isOk());
+        mvc.perform(get("/crew-schedules/rotation"))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds", hasSize(0)));
+
+        // 3 packers in this shift only, then back to the crew's 2
+        mvc.perform(json(put("/crew-schedules/crew-shifts/" + SHIFT_ID + "/composition"),
+                "{\"roles\": [{\"roleId\": 10, \"count\": 3}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.staffCount").value(3))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.roleCounts.10").value(3));
+        mvc.perform(delete("/crew-schedules/crew-shifts/" + SHIFT_ID + "/composition"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.roleCounts").isEmpty());
+    }
+
+    @Test
     void everySessionChangesOnlyItsOwnCopy() throws Exception {
         mvc.perform(json(post("/crew-schedules/crew-shifts"), shift("DAY", 1)).header(SessionHeader.HEADER, "user1"))
                 .andExpect(status().isOk());
