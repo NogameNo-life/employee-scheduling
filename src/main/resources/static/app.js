@@ -69,6 +69,13 @@ $(document).ready(function () {
     }
   });
   $("#shiftPeopleModal").on("hidden.bs.modal", () => peopleDialogCrewShiftId = null);
+  $("#shiftPeopleModalCrewButton").click(function () {
+    const crewShift = lastSchedule == null ? null : lastSchedule.crewShifts.find(s => s.id === peopleDialogCrewShiftId);
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftPeopleModal")).hide();
+    if (crewShift != null) {
+      openCrew(crewShift.crew.id);
+    }
+  });
   // HACK to allow vis-timeline to work within Bootstrap tabs
   $("#byLineTab").on('shown.bs.tab', function (event) {
     byLineTimeline.redraw();
@@ -76,8 +83,8 @@ $(document).ready(function () {
   $("#byEmployeeTab").on('shown.bs.tab', function (event) {
     byEmployeeTimeline.redraw();
   })
-  // Click on a shift: the lock icon pins/unpins it, the crew name opens the crew in the crew list,
-  // the people icon opens the people of this shift.
+  // Click on a shift: the lock icon pins/unpins it, the crew name or the people icon opens the people of this
+  // shift. Hovering over a shift shows its people (the item title).
   // A click elsewhere only selects the shift (to drag it or remove it with the x).
   byLineTimeline.on("click", props => {
     if (props.item == null) {
@@ -85,9 +92,7 @@ $(document).ready(function () {
     }
     if (clickedOn(props.event, ".pin-toggle")) {
       togglePinned(props.item);
-    } else if (clickedOn(props.event, ".crew-link")) {
-      openCrewOfItem(byLineItemDataSet, props.item);
-    } else if (clickedOn(props.event, ".people-link")) {
+    } else if (clickedOn(props.event, ".crew-link, .people-link")) {
       openShiftPeopleDialog(props.item);
     }
   });
@@ -155,6 +160,7 @@ function refreshPositions() {
     const unassigned = schedule.positions.filter(position => position.employee == null).length;
     $("#unassignedPositions").text(`Unassigned positions: ${unassigned} / ${schedule.positions.length}`);
     renderEmployees(schedule);
+    renderShiftPeopleTitles(schedule);
     renderShiftPeopleDialog();
   }).fail(function (xhr, ajaxOptions, thrownError) {
     showError("Getting the positions failed.", xhr);
@@ -237,9 +243,10 @@ function addCrewShiftItem(crewShift) {
   }
   const people = `${crewShift.employeeIds.length} people` + (changes.length === 0 ? "" : ` (${changes.join(", ")})`);
   const element = $(`<div class="card-body p-2"/>`)
-    .append($(`<h5 class="card-title mb-1"/>`).append(pin).append($(`<span class="crew-link"/>`).text(crewName(crew))))
+    .append($(`<h5 class="card-title mb-1"/>`).append(pin)
+      .append($(`<span class="crew-link"/>`).text(crewName(crew))))
     .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${start.format(timeFormat)} - ${end.format(timeFormat)}, `)
-      .append($(`<span class="people-link" title="Click to see and change the people of this shift."/>`)
+      .append($(`<span class="people-link"/>`)
         .append($(`<span class="fas fa-users me-1"/>`)).append($(`<span/>`).text(people))));
   byLineItemDataSet.add({
     id: crewShift.id, group: crewShift.line.id, crewId: crew.id,
@@ -468,6 +475,24 @@ function renderShiftPeopleDialog() {
     .append(free.length === 0 ? $(`<option value=""/>`).text("Nobody is free at that time") : null)
     .append(free.map(other => $(`<option/>`).val(other.id).text(`${other.fullName} (${crewName(other.crew)})`)));
   $("#shiftPeopleModalAddButton").prop("disabled", free.length === 0);
+}
+
+// Tooltip of every "By line" shift: its people (names come with the whole version, after the crew schedule)
+function renderShiftPeopleTitles(schedule) {
+  const employeesById = new Map(schedule.employees.map(employee => [employee.id, employee]));
+  const name = id => employeesById.has(id) ? employeesById.get(id).fullName : String(id);
+  const updates = schedule.crewShifts
+    .filter(crewShift => byLineItemDataSet.get(crewShift.id) != null)
+    .map(crewShift => {
+      const title = $(`<div/>`).append($(`<strong/>`).text(`${crewName(crewShift.crew)}: ${crewShift.employeeIds.length} people`));
+      crewShift.employeeIds.map(id => [name(id), crewShift.extraEmployeeIds.includes(id)])
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .forEach(([fullName, substitute]) => title.append($(`<div/>`).text(fullName + (substitute ? " (substitute)" : ""))));
+      crewShift.absentEmployeeIds.map(name).sort()
+        .forEach(fullName => title.append($(`<div class="text-muted text-decoration-line-through"/>`).text(fullName)));
+      return {id: crewShift.id, title: title.html()};
+    });
+  byLineItemDataSet.update(updates);
 }
 
 // The dialog stays open; it is drawn again when the new version is loaded (refreshPositions)

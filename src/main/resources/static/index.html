@@ -41,8 +41,9 @@
     <strong>Change the crew:</strong> double-click a shift. <strong>Move:</strong> drag a shift.
     <strong>Remove:</strong> select a shift and press &times;.
     <strong>Pin:</strong> click <span class="fas fa-lock-open"></span> on a shift; a pinned shift cannot be moved or removed.
-    <strong>People:</strong> click <span class="fas fa-users"></span> on a shift to see and change who works this one
-    shift (the crew does not change).
+    <strong>People:</strong> hover over a shift to see who works it; click the crew name or
+    <span class="fas fa-users"></span> to change the people of this one shift (the crew does not change).
+    Click a crew in the crew list below to change the crew for all days.
   </p>
   <p class="text-muted small mb-2">
     <strong>By employee:</strong> a crew shift has the employees of its crew, but one shift can differ.
@@ -84,7 +85,7 @@
 
   <h2 class="h4">Crews <span id="crewCount" class="text-muted fs-6"></span></h2>
   <p class="text-muted small mb-2">
-    Click a crew (here, or its name in the timeline) to see its roles and its employees (the default composition of
+    Click a crew (here, or its name in the "By employee" timeline) to see its roles and its employees (the default composition of
     its shifts). The crew of an employee can be changed; roles are read-only. Changes are kept only in your schedule
     version.
   </p>
@@ -153,6 +154,9 @@
         </div>
       </div>
       <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary me-auto" id="shiftPeopleModalCrewButton">
+          Show the crew in the crew list
+        </button>
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
