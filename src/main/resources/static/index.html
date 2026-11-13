@@ -15,6 +15,15 @@
       background: #D3D7CFFF;
     }
     .vis-item { cursor: pointer; }
+    .vis-item.pinned { border-width: 3px; border-color: #2E3436; }
+    .vis-item.absent { background-color: #EEEEEC; border-color: #BABDB6; color: #888A85; text-decoration: line-through; }
+    .vis-item.substitute { border-style: dashed; border-width: 2px; border-color: #2E3436; }
+    .pin-toggle { cursor: pointer; }
+    .crew-link:hover, .people-link:hover { text-decoration: underline; }
+    .people-link, .employee-link { cursor: pointer; }
+    .employee-link:hover { text-decoration: underline; }
+    .vis-item.vis-background.absence { background-color: rgba(239, 41, 41, .12); }
+    .role-count { width: 5rem; }
     .crew-color { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; }
   </style>
 </head>
@@ -26,15 +35,31 @@
   </div>
   <h1>Employee scheduling</h1>
   <p>
-    Crew schedule by line: every day the first crew works the day shift (08:00-20:00) and the second crew works
-    the night shift (20:00-08:00). Every crew works Day - Night - Sleep day - Day off.
+    Crew schedule by line: every day one crew works the day shift (08:00-20:00) and one crew works
+    the night shift (20:00-08:00). Usually every crew works Day - Night - Sleep day - Day off.
+  </p>
+  <p class="text-muted small mb-2">
+    <strong>Add:</strong> double-click an empty place on a line (08:00-20:00 = day shift, 20:00-08:00 = night shift).
+    <strong>Change the crew:</strong> double-click a shift. <strong>Move:</strong> drag a shift.
+    <strong>Remove:</strong> select a shift and press &times;.
+    <strong>Pin:</strong> click <span class="fas fa-lock-open"></span> on a shift; a pinned shift cannot be moved or removed.
+    <strong>People:</strong> click the crew name or
+    <span class="fas fa-users"></span> on a shift to see and change the people of this one shift (the crew does not change).
+    Click a crew in the crew list below to change the crew for all days.
+  </p>
+  <p class="text-muted small mb-2">
+    <strong>By employee:</strong> a crew shift has the employees of its crew, but one shift can differ.
+    Double-click an employee's shift to take them off this shift or replace them with a free employee
+    (dashed = substitute, grey = absent). Double-click an empty place in an employee's row to add them to a crew
+    shift at that time. Only that shift changes, not the crew. Click an employee's name to enter a vacation,
+    sick leave or dismissal, or to move them to another crew from a date (red background = absence).
   </p>
   <p class="text-muted small" id="version"></p>
 
   <div class="mb-2">
     <input id="monthInput" type="month" class="form-control d-inline-block w-auto align-middle">
-    <button id="generateButton" type="button" class="btn btn-secondary">
-      <span class="fas fa-calendar-alt"></span> Generate
+    <button id="newMonthButton" type="button" class="btn btn-secondary">
+      <span class="fas fa-calendar-plus"></span> New empty month
     </button>
     <button id="refreshButton" type="button" class="btn btn-secondary">
       <span class="fas fa-refresh"></span> Refresh
@@ -62,8 +87,155 @@
   </div>
 
   <h2 class="h4">Crews <span id="crewCount" class="text-muted fs-6"></span></h2>
-  <p class="text-muted small mb-2">Click a crew (here or in the timeline) to see all its employees.</p>
+  <p class="text-muted small mb-2">
+    Click a crew (here, or its name in the "By employee" timeline) to see its roles and its employees (the default composition of
+    its shifts). The crew column changes the crew of an employee for the whole month; click the employee's name for a
+    crew change from a date, vacation, sick leave or dismissal. Roles are read-only. Changes are kept only in your
+    schedule version.
+  </p>
   <div class="accordion mb-4" id="crewList"></div>
+</div>
+
+<div class="modal fade" id="crewShiftModal" tabindex="-1" aria-labelledby="crewShiftModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="crewShiftModalTitle">Crew shift</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p id="crewShiftModalSlot" class="mb-2"></p>
+        <label for="crewShiftModalCrew" class="form-label">Crew</label>
+        <select id="crewShiftModalCrew" class="form-select"></select>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="crewShiftModalSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="shiftEmployeeModal" tabindex="-1" aria-labelledby="shiftEmployeeModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="shiftEmployeeModalTitle">Employee</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p id="shiftEmployeeModalText" class="mb-2"></p>
+        <div id="shiftEmployeeModalSelectGroup">
+          <label for="shiftEmployeeModalSelect" class="form-label" id="shiftEmployeeModalSelectLabel"></label>
+          <select id="shiftEmployeeModalSelect" class="form-select"></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="shiftEmployeeModalSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="shiftPeopleModal" tabindex="-1" aria-labelledby="shiftPeopleModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="shiftPeopleModalTitle">People of the crew shift</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p id="shiftPeopleModalSlot" class="mb-1"></p>
+        <p class="text-muted small mb-2">Changes are made only for this shift, not for the crew.</p>
+        <div id="shiftPeopleModalList"></div>
+        <h6 class="mt-3">People needed in this shift</h6>
+        <p class="text-muted small mb-1" id="shiftPeopleModalCompositionText"></p>
+        <div id="shiftPeopleModalComposition"></div>
+        <div class="d-flex gap-2 mt-1">
+          <select id="shiftPeopleModalAddRole" class="form-select form-select-sm w-auto"></select>
+          <button type="button" class="btn btn-sm btn-primary" id="shiftPeopleModalCompositionSave">Save the numbers</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="shiftPeopleModalCompositionReset">
+            Back to the crew's numbers
+          </button>
+        </div>
+        <label for="shiftPeopleModalAdd" class="form-label mt-2">Add an employee to this shift</label>
+        <div class="input-group">
+          <select id="shiftPeopleModalAdd" class="form-select"></select>
+          <button type="button" class="btn btn-primary" id="shiftPeopleModalAddButton">
+            <span class="fas fa-user-plus"></span> Add
+          </button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary me-auto" id="shiftPeopleModalCrewButton">
+          Show the crew in the crew list
+        </button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="employeeModal" tabindex="-1" aria-labelledby="employeeModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="employeeModalTitle">Employee</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p id="employeeModalRoles" class="text-muted mb-2"></p>
+
+        <h6>Crew</h6>
+        <ul id="employeeModalCrews" class="list-unstyled mb-2"></ul>
+        <div class="row g-2 align-items-end mb-3">
+          <div class="col-auto">
+            <label for="employeeModalCrew" class="form-label small mb-0">Move to crew</label>
+            <select id="employeeModalCrew" class="form-select form-select-sm"></select>
+          </div>
+          <div class="col-auto">
+            <label for="employeeModalCrewFrom" class="form-label small mb-0">from</label>
+            <input id="employeeModalCrewFrom" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-sm btn-primary" id="employeeModalCrewSave">Move</button>
+          </div>
+        </div>
+
+        <h6>Absences (vacation, sick leave, dismissal)</h6>
+        <ul id="employeeModalAbsences" class="list-unstyled mb-2"></ul>
+        <div class="row g-2 align-items-end">
+          <div class="col-auto">
+            <label for="employeeModalAbsenceType" class="form-label small mb-0">Type</label>
+            <select id="employeeModalAbsenceType" class="form-select form-select-sm">
+              <option value="VACATION">Vacation</option>
+              <option value="SICK_LEAVE">Sick leave</option>
+              <option value="DISMISSAL">Dismissal (no end)</option>
+              <option value="OTHER">Other</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label for="employeeModalAbsenceFrom" class="form-label small mb-0">from</label>
+            <input id="employeeModalAbsenceFrom" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <label for="employeeModalAbsenceTo" class="form-label small mb-0">to (included)</label>
+            <input id="employeeModalAbsenceTo" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-sm btn-primary" id="employeeModalAbsenceSave">Add</button>
+          </div>
+        </div>
+        <p class="text-muted small mt-2 mb-0">
+          An absent employee works no shift that starts on these days. Changes are kept only in your schedule version.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="/webjars/jquery/jquery.min.js"></script>

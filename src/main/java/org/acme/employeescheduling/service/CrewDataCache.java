@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.stereotype.Service;
 
@@ -33,11 +34,14 @@ public class CrewDataCache {
     private final CrewRepository crewRepository;
     private final LineRepository lineRepository;
 
-    /** Department (OBJ, trimmed) -> data. */
-    /** Replaced as a whole by {@link #refresh()}, so other users never see a half-loaded cache. */
-    private volatile ConcurrentMap<String, CrewData> dataByDepartment = new ConcurrentHashMap<>();
-    /** Line code (KRC, trimmed) -> line. */
-    private volatile ConcurrentHashMap<String, Line> linesById = new ConcurrentHashMap<>();
+    /**
+     * Department (OBJ, trimmed) -> data. Replaced as a whole by {@link #refresh()}, so other users never see a
+     * half-loaded cache; {@link #get} adds departments that were not loaded yet.
+     */
+    private final AtomicReference<ConcurrentMap<String, CrewData>> dataByDepartment =
+            new AtomicReference<>(new ConcurrentHashMap<>());
+    /** Line code (KRC, trimmed) -> line. Read-only, replaced as a whole by {@link #refreshLines()}. */
+    private final AtomicReference<Map<String, Line>> linesById = new AtomicReference<>(Map.of());
 
     public CrewDataCache(CrewDataLoader loader, CrewRepository crewRepository, LineRepository lineRepository) {
         this.loader = loader;
@@ -56,12 +60,12 @@ public class CrewDataCache {
      * even when the crews cannot be loaded.
      */
     public void refreshLines() {
-        ConcurrentHashMap<String, Line> lines = new ConcurrentHashMap<>();
+        Map<String, Line> lines = new HashMap<>();
         for (PlrLines row : lineRepository.findActive()) {
             String id = row.lineId.trim();
             lines.putIfAbsent(id, new Line(id, row.lineName.trim()));
         }
-        linesById = lines;
+        linesById.set(Map.copyOf(lines));
         LOGGER.info("Loaded {} lines.", lines.size());
     }
 
@@ -71,18 +75,18 @@ public class CrewDataCache {
         for (String department : departments) {
             data.put(department, loader.load(department));
         }
-        dataByDepartment = data;
+        dataByDepartment.set(data);
         LOGGER.info("Loaded crew data for departments {}.", departments);
     }
 
     /** Data for one department. A department that was not loaded at startup is loaded now. */
     public CrewData get(String department) {
-        return dataByDepartment.computeIfAbsent(department.trim(), loader::load);
+        return dataByDepartment.get().computeIfAbsent(department.trim(), loader::load);
     }
 
     /** Data of all loaded departments together: crews of different departments can share the schedule. */
     public CrewData getAll() {
-        List<CrewData> all = List.copyOf(dataByDepartment.values());
+        List<CrewData> all = List.copyOf(dataByDepartment.get().values());
         Map<Integer, Map<Role, Integer>> composition = new HashMap<>();
         all.forEach(data -> composition.putAll(data.composition()));
         return new CrewData(
@@ -93,19 +97,19 @@ public class CrewDataCache {
     }
 
     public Optional<Line> getLine(String lineId) {
-        return Optional.ofNullable(linesById.get(lineId.trim()));
+        return Optional.ofNullable(linesById.get().get(lineId.trim()));
     }
 
     /** All lines, sorted by name. */
     public List<Line> getLines() {
-        return linesById.values().stream()
+        return linesById.get().values().stream()
                 .sorted(Comparator.comparing(Line::getName).thenComparing(Line::getId))
                 .toList();
     }
 
     /** Crews of all loaded departments, sorted by number. */
     public List<Crew> getAllCrews() {
-        return dataByDepartment.values().stream()
+        return dataByDepartment.get().values().stream()
                 .flatMap(data -> data.crews().stream())
                 .distinct()
                 .sorted(Comparator.comparing(Crew::getId))
