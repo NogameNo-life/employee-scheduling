@@ -59,6 +59,16 @@ $(document).ready(function () {
   $("#newMonthButton").click(function () {
     newEmptyMonth();
   });
+  $("#newMonthModalSave").click(function () {
+    startNewMonth();
+  });
+  $("#generateButton").click(function () {
+    openGenerateDialog();
+  });
+  $("#generateLine").on("change", renderGenerateStartCrews);
+  $("#generateModalSave").click(function () {
+    generate();
+  });
   $("#refreshButton").click(function () {
     refreshSchedule();
   });
@@ -192,25 +202,97 @@ function onRosterChanged(roster) {
   refreshCrews();
 }
 
+// "New empty month" dialog: the new version is empty, or generated when "Generate the schedule" is checked
 function newEmptyMonth() {
   const month = $("#monthInput").val();
   if (!month) {
     showSimpleError("Choose a month first.");
     return;
   }
-  if (!confirm(`Start an empty crew schedule for ${month}? Your current schedule version will be replaced.`)) {
+  $("#newMonthModalText").text(`Start a new crew schedule for ${month}? Your current schedule version will be replaced.`);
+  $("#newMonthGenerate").prop("checked", false);
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("newMonthModal")).show();
+}
+
+function startNewMonth() {
+  const month = $("#monthInput").val();
+  const generate = $("#newMonthGenerate").is(":checked");
+  send("POST", `/crew-schedules/init?month=${encodeURIComponent(month)}&generate=${generate}`).done(roster => {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("newMonthModal")).hide();
+    onRosterChanged(roster);
+    showGeneration(roster.generation);
+  }).fail(xhr => showError("Creating the crew schedule failed.", xhr));
+}
+
+// "Generate" dialog: line (all or one), from date, start crew (auto or one of the line's crews), overwrite
+function openGenerateDialog() {
+  if (shownMonth == null) {
+    showSimpleError("There is no crew schedule yet. Start a new month first.");
     return;
   }
-  $.post("/crew-schedules/init?month=" + month, function (roster) {
+  const lineSelect = $("#generateLine").empty().append($(`<option value=""/>`).text("All lines"));
+  linesById.forEach(line => lineSelect.append($(`<option/>`).val(line.id).text(line.name)));
+  $("#generateFrom").val(JSJoda.YearMonth.parse(shownMonth).atDay(1).toString())
+    .attr("min", JSJoda.YearMonth.parse(shownMonth).atDay(1).toString())
+    .attr("max", JSJoda.YearMonth.parse(shownMonth).atEndOfMonth().toString());
+  $("#generateOverwrite").prop("checked", false);
+  renderGenerateStartCrews();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("generateModal")).show();
+}
+
+// A start crew can only be chosen for one line, from the crews of that line (Crew.lineId)
+function renderGenerateStartCrews() {
+  const lineId = $("#generateLine").val();
+  const select = $("#generateStartCrew").empty()
+    .append($(`<option value=""/>`).text("Auto (continue the shifts before the date)"));
+  if (lineId) {
+    crewDetailsList.filter(details => details.crew.lineId === lineId)
+      .forEach(details => select.append($(`<option/>`).val(details.crew.id).text(crewName(details.crew))));
+  }
+  select.prop("disabled", !lineId);
+}
+
+function generate() {
+  const overwrite = $("#generateOverwrite").is(":checked");
+  if (overwrite && !confirm("Remove the shifts that are not pinned from this date on and generate them again?")) {
+    return;
+  }
+  const startCrewId = $("#generateStartCrew").val();
+  const body = {
+    lineId: $("#generateLine").val() || null,
+    from: $("#generateFrom").val() || null,
+    startCrewId: startCrewId ? parseInt(startCrewId) : null,
+    overwrite: overwrite
+  };
+  send("POST", "/crew-schedules/generate", body).done(roster => {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("generateModal")).hide();
     onRosterChanged(roster);
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Creating the crew schedule failed.", xhr);
-  });
+    showGeneration(roster.generation);
+  }).fail(xhr => showError("Generating the crew schedule failed.", xhr));
+}
+
+// What the generator did: created and kept shifts, messages (skipped lines, shifts left empty)
+function showGeneration(generation) {
+  if (generation == null) {
+    return;
+  }
+  const toast = $(`<div class="toast" role="status" aria-live="polite" aria-atomic="true" data-bs-delay="30000"/>`)
+    .append($(`<div class="toast-header bg-info"/>`)
+      .append($(`<strong class="me-auto text-dark"/>`).text("Generated"))
+      .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"/>`)))
+    .append($(`<div class="toast-body"/>`)
+      .append($(`<p class="mb-1"/>`).text(`${generation.created} shifts created, ${generation.kept} kept.`))
+      .append(generation.messages.length === 0 ? null : $(`<ul class="generation-messages small mb-0 ps-3"/>`)
+        .append(generation.messages.map(message => $(`<li/>`).text(message)))));
+  $("#notificationPanel").append(toast);
+  toast.on("hidden.bs.toast", () => toast.remove());
+  new bootstrap.Toast(toast[0]).show();
 }
 
 // Gantt chart of the crew schedule: one row per line, one bar per shift with the crew that works it
 function renderRoster(roster) {
   setShiftTimes(roster.shifts);
+  renderWarnings(roster.warnings);
   $("#version").text(`Session: ${roster.sessionId}, version: ${roster.versionId}`);
   $("#monthInput").val(roster.month);
   byLineGroupDataSet.clear();
@@ -223,8 +305,8 @@ function renderRoster(roster) {
   renderLineGroups(roster.lines.map(lineSchedule => lineSchedule.line));
   $.each(roster.lines, (index, lineSchedule) => {
     $.each(lineSchedule.days, (i, day) => {
-      addCrewShiftItem(day.dayShift);
-      addCrewShiftItem(day.nightShift);
+      addCrewShiftItem(day.dayShift, warningsByCrewShift.get(day.dayShift?.id));
+      addCrewShiftItem(day.nightShift, warningsByCrewShift.get(day.nightShift?.id));
     });
   });
   if (shownMonth !== roster.month) {
@@ -242,7 +324,25 @@ function renderLineGroups(lines) {
   });
 }
 
-function addCrewShiftItem(crewShift) {
+// Rest rule warnings of the version (calculated by the server for every answer): crew shift id -> messages
+let warningsByCrewShift = new Map();
+
+function renderWarnings(warnings) {
+  warningsByCrewShift = new Map();
+  (warnings || []).forEach(warning => {
+    if (!warningsByCrewShift.has(warning.crewShiftId)) {
+      warningsByCrewShift.set(warning.crewShiftId, []);
+    }
+    warningsByCrewShift.get(warning.crewShiftId).push(warning.message);
+  });
+  const count = (warnings || []).length;
+  $("#warningCount").empty().attr("title", (warnings || []).map(warning => warning.message).join("\n"))
+    .append(count === 0 ? null : [$(`<span class="fas fa-exclamation-triangle me-1"/>`),
+      $(`<span/>`).text(count === 1 ? "1 warning" : `${count} warnings`)]);
+}
+
+// warnings: messages of the rest rule warnings of this crew shift (orange outline, tooltip)
+function addCrewShiftItem(crewShift, warnings) {
   if (crewShift == null) {
     return;
   }
@@ -273,7 +373,10 @@ function addCrewShiftItem(crewShift) {
   byLineItemDataSet.add({
     id: crewShift.id, group: crewShift.line.id, crewId: crew.id,
     shiftDate: crewShift.date, shiftType: crewShift.type, pinned: crewShift.pinned,
-    editable: !crewShift.pinned, className: crewShift.pinned ? "pinned" : "",
+    editable: !crewShift.pinned,
+    className: [crewShift.pinned ? "pinned" : "", warnings ? "rest-warning" : ""].join(" ").trim(),
+    // The tooltip is HTML and the XSS filter of vis-timeline is off: escape the messages (they have names)
+    title: warnings ? warnings.map(message => $("<div/>").text(message).html()).join("<br>") : undefined,
     content: element.html(),
     start: crewShift.start, end: crewShift.end,
     style: "background-color: " + pickColor("crew" + crew.id)

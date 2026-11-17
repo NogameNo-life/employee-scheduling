@@ -16,11 +16,18 @@ import org.acme.employeescheduling.service.CrewDataCache;
 import org.acme.employeescheduling.service.CrewRosterService;
 import org.acme.employeescheduling.service.CrewRosterService.CrewDetails;
 import org.acme.employeescheduling.service.CrewRosterService.Rotation;
+import org.acme.employeescheduling.service.CrewRotationGenerator;
+import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateRequest;
+import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateResult;
 import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
+import org.acme.employeescheduling.service.ScheduleValidator;
+import org.acme.employeescheduling.service.ScheduleValidator.ScheduleWarning;
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -48,14 +55,19 @@ public class CrewScheduleController {
     private final CrewScheduleSessionService sessionService;
     private final CrewRosterService rosterService;
     private final CrewScheduleEditor editor;
+    private final CrewRotationGenerator generator;
+    private final ScheduleValidator validator;
     private final CrewDataCache crewDataCache;
     private final Clock clock;
 
     public CrewScheduleController(CrewScheduleSessionService sessionService, CrewRosterService rosterService,
-            CrewScheduleEditor editor, CrewDataCache crewDataCache, Clock clock) {
+            CrewScheduleEditor editor, CrewRotationGenerator generator, ScheduleValidator validator,
+            CrewDataCache crewDataCache, Clock clock) {
         this.sessionService = sessionService;
         this.rosterService = rosterService;
         this.editor = editor;
+        this.generator = generator;
+        this.validator = validator;
         this.crewDataCache = crewDataCache;
         this.clock = clock;
     }
@@ -97,19 +109,40 @@ public class CrewScheduleController {
     /**
      * Reloads data from the DB and makes a new version without crew shifts for
      * {@code month} (yyyy-MM, default: the current month). Only the caller's
-     * version is replaced.
+     * version is replaced. {@code generate=true}: then generates the crew schedule of every line from scratch
+     * (the response has {@code generation}); default: the version stays empty.
      */
     @PostMapping("/init")
     public RotationResponse init(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @RequestParam(required = false) String month) {
+            @RequestParam(required = false) String month,
+            @RequestParam(defaultValue = "false") boolean generate) {
         YearMonth yearMonth;
         try {
             yearMonth = month == null || month.isBlank() ? YearMonth.now(clock) : YearMonth.parse(month);
         } catch (DateTimeParseException e) {
             throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, "month must be yyyy-MM, got: " + month);
         }
-        return toResponse(sessionId, sessionService.init(sessionId, yearMonth));
+        ScheduleVersion version = sessionService.init(sessionId, yearMonth);
+        if (!generate) {
+            return toResponse(sessionId, version);
+        }
+        return generate(sessionId, new GenerateRequest(null, null, null, false));
+    }
+
+    /**
+     * Fills the crew schedule with the rotation Day - Night - Sleep day - Day off (see
+     * {@link CrewRotationGenerator}). 400: invalid request, 404: unknown line, 409: the earlier crew shifts of a
+     * line do not fit one rotation (choose the start crew).
+     */
+    @PostMapping("/generate")
+    public RotationResponse generate(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestBody(required = false) GenerateRequest request) {
+        GenerateResult[] result = new GenerateResult[1];
+        ScheduleVersion version = sessionService.edit(sessionId,
+                schedule -> result[0] = generator.generate(schedule, request));
+        return toResponse(sessionId, version, result[0]);
     }
 
     /** Puts a crew on a line for one shift (409 if the line shift already has a crew). */
@@ -221,14 +254,26 @@ public class CrewScheduleController {
     }
 
     private RotationResponse toResponse(String sessionId, ScheduleVersion version) {
-        Rotation rotation = rosterService.toRotation(version.schedule());
-        return new RotationResponse(sessionId, version.id(), rotation.month(), version.schedule().getShifts(),
-                rotation.lines());
+        return toResponse(sessionId, version, null);
     }
 
-    /** @param shifts times of the shift types (PLR_SM), e.g. for snapping a dragged crew shift */
+    private RotationResponse toResponse(String sessionId, ScheduleVersion version, GenerateResult generation) {
+        // Read the version under its lock: another request of the same session may change it
+        synchronized (version.schedule()) {
+            Rotation rotation = rosterService.toRotation(version.schedule());
+            return new RotationResponse(sessionId, version.id(), rotation.month(), version.schedule().getShifts(),
+                    rotation.lines(), validator.validate(version.schedule()), generation);
+        }
+    }
+
+    /**
+     * @param shifts     times of the shift types (PLR_SM), e.g. for snapping a dragged crew shift
+     * @param warnings   rest rule warnings, calculated for every response (nothing is blocked)
+     * @param generation only after generating: what the generator did
+     */
     public record RotationResponse(String sessionId, String versionId, YearMonth month, List<ShiftTime> shifts,
-            List<LineSchedule> lines) {
+            List<LineSchedule> lines, List<ScheduleWarning> warnings,
+            @JsonInclude(JsonInclude.Include.NON_NULL) GenerateResult generation) {
     }
 
     public record PinnedRequest(boolean pinned) {

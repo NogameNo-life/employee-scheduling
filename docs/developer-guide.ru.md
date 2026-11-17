@@ -45,6 +45,7 @@ Docker: `docker compose up -d --build` (настройки из `.env`).
 | `SPRING_PROFILES_ACTIVE` | `local` — вывод SQL; пусто для production |
 | `HTTP_PORT` | Порт HTTP (по умолчанию 8080) |
 | `APP_TIME_ZONE` | Часовой пояс завода для «сегодня» и «текущего месяца» (по умолчанию `Europe/Minsk`) |
+| `APP_MIN_REST_HOURS` | Минимальный отдых между сменами в часах для предупреждений (по умолчанию 12) |
 | `MES_DB_URL`, `MES_DB_USERNAME`, `MES_DB_PASSWORD` | База MES2 (таблицы `PLR_*`) |
 | `TABU2_DB_URL`, `TABU2_DB_USERNAME`, `TABU2_DB_PASSWORD` | База TABU2 (`BD_CARD`) |
 | `CORS_ORIGIN` | Разрешённые адреса фронтенда через запятую; пусто — без CORS |
@@ -200,6 +201,24 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 - в отсутствие нельзя добавить сотрудника в смену или поставить на замену (409);
 - время смены бригады берётся из `shifts` версии (`CrewSchedule.getShift(type)`).
 
+### Генератор: `CrewRotationGenerator`
+
+Цикл День → Ночь → Отсыпной → Выходной. Бригады линии (`Crew.lineId` = `Line.id`) по номеру c0..c3, порядок
+дневных смен D = [c0, c2, c3, c1]; день i от даты `from`: дневная — D[(i + s) mod 4], ночная —
+D[(i + s − 1) mod 4]. Сдвиг s: из `startCrewId`, иначе из последней смены каждой бригады линии на этой линии до
+`from` (разные сдвиги — `IllegalStateException`, 409), иначе 0. Сначала проверяются все линии и считаются сдвиги,
+потом меняется версия, поэтому при ошибке ничего не меняется. Смены создаются через
+`CrewScheduleEditor.addCrewShift`; если редактор отказывает (бригада занята), смена остаётся пустой с сообщением.
+Линия не с 4 бригадами пропускается. Закреплённые смены не меняются. Вызывается через
+`CrewScheduleSessionService.edit`, как редактор.
+
+### Предупреждения: `ScheduleValidator`
+
+Правило отдыха: между концом смены и началом следующей не меньше `app.schedule.min-rest-hours` (12) часов, по
+реальному времени смен. Проверяются бригады (все линии) и сотрудники (`CrewShift.getEmployees()`); предупреждение
+сотрудника не добавляется для пары смен, у которой уже есть предупреждение бригады. Считается в
+`CrewScheduleController.toResponse` для каждого ответа (`warnings`), не хранится. Граница с предыдущим месяцем — TODO.
+
 `LineSchedule` собирает смены по линиям и дням: дневная и ночная смена дня — `Pair<CrewShift, CrewShift>`
 (commons-lang3) в `LineSchedule.LineDay`.
 
@@ -209,7 +228,7 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 
 Все пути начинаются с `/crew-schedules` и работают с версией вызывающего (`X-Session-Id`).
 Изменения смен возвращают весь график по линиям (`RotationResponse`: `sessionId`, `versionId`, `month`, `shifts`,
-`lines`).
+`lines`, `warnings`; после генерации ещё `generation`).
 Примеры запросов и ответов: [rest-api.ru.md](rest-api.ru.md).
 
 | Метод | Путь | Тело | Назначение |
@@ -218,7 +237,8 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 | GET | `/crew-schedules/rotation` | | Дневная и ночная бригада для каждой линии и дня |
 | GET | `/crew-schedules/crews` | | Бригады с линиями (где работают в версии) и сотрудниками |
 | GET | `/crew-schedules/lines` | | Линии текущего месяца; работает без версии |
-| POST | `/crew-schedules/init?month=yyyy-MM` | | Новая пустая версия на месяц (без `month` — текущий) |
+| POST | `/crew-schedules/init?month=yyyy-MM&generate=false` | | Новая версия на месяц (без `month` — текущий); `generate=true` — сразу сгенерировать все линии |
+| POST | `/crew-schedules/generate` | `{lineId?, from?, startCrewId?, overwrite}` | Заполнить график по циклу (`generation`: `created`, `kept`, `messages`) |
 | POST | `/crew-schedules/crew-shifts` | `{date, type, lineId, crewId}` | Поставить бригаду на смену |
 | PUT | `/crew-schedules/crew-shifts/{id}` | `{date, type, lineId, crewId}` | Перенести смену или поменять бригаду |
 | DELETE | `/crew-schedules/crew-shifts/{id}` | | Удалить смену |
@@ -240,7 +260,10 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
     Двойной щелчок по пустому месту — добавить (окно `crewShiftModal`), двойной щелчок по смене — поменять бригаду,
     перетаскивание — перенести (`snapToShiftStart`, привязка к началу ближайшей смены), × — удалить,
     замок — закрепить. Щелчок по названию бригады или по числу людей открывает окно людей смены
-    (`shiftPeopleModal`, `openShiftPeopleDialog` / `renderShiftPeopleDialog`).
+    (`shiftPeopleModal`, `openShiftPeopleDialog` / `renderShiftPeopleDialog`). Смены из `warnings` — класс
+    `rest-warning` (оранжевая рамка) и подсказка `title` (сообщения экранируются: подсказка — HTML).
+- Кнопка «Generate» (`generateModal`, `openGenerateDialog`, `generate`) и окно нового месяца (`newMonthModal`,
+  флажок `generate=true`); результат генерации — `showGeneration`, счётчик предупреждений — `renderWarnings`.
   - **«By employee»** (`byEmployeeTimeline`): сотрудники по бригадам (по позиции, затем по ФИО —
     `byPositionAndName`), данные из `GET /crew-schedules`; часы за месяц — сумма `hours` смен.
     Двойной щелчок — окно `shiftEmployeeModal` (снять, заменить, вернуть, добавить). Отсутствия — фоновые
@@ -267,6 +290,8 @@ mvn test
 | Тест | Что проверяет |
 | --- | --- |
 | `CrewScheduleEditorTest` | Правила редактора |
+| `CrewRotationGeneratorTest` | Таблица цикла, бригада начала, продолжение, конфликт, закреплённые, overwrite, линия без 4 бригад, месяцы 28/30/31 дней, занятая бригада |
+| `ScheduleValidatorTest` | Правило отдыха: бригады, две линии, замена, отсутствие, время из `PLR_SM` |
 | `CrewScheduleFactoryTest` | Создание и копирование версий |
 | `CrewScheduleRepositoryTest` | Хранение версий |
 | `CrewRosterServiceTest` | График по линиям, список бригад |
@@ -280,7 +305,7 @@ mvn test
 
 ## Что пока не сделано
 
-- Генератор графика бригад и предупреждения о правиле отдыха (не меньше 12 часов между сменами).
+- Продолжение графика с предыдущего месяца, правило отдыха на границе месяцев.
 - Сохранение и загрузка плана: `PLR_SNAR` (смены бригад), `PLR_RGRT` (часы сотрудников); часы по сотрудникам,
   один сотрудник на двух линиях за день.
 - Отпуска и больничные из табеля (`BD_RGR`): сейчас отсутствия вводятся вручную и хранятся только в версии.

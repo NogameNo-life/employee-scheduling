@@ -3,6 +3,8 @@ package org.acme.employeescheduling.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -30,6 +32,8 @@ import org.acme.employeescheduling.service.CrewRosterService;
 import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleFactory;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
+import org.acme.employeescheduling.service.CrewRotationGenerator;
+import org.acme.employeescheduling.service.ScheduleValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,7 +47,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 /** The REST API of the editor with the real services; only the DB (CrewDataCache) is mocked. */
 @WebMvcTest(CrewScheduleController.class)
 @Import({ CrewScheduleSessionService.class, CrewScheduleRepository.class, CrewRosterService.class,
-        CrewScheduleFactory.class, CrewScheduleEditor.class, ClockConfig.class })
+        CrewScheduleFactory.class, CrewScheduleEditor.class, CrewRotationGenerator.class, ScheduleValidator.class,
+        ClockConfig.class })
 class CrewScheduleControllerTest {
 
     private static final String SHIFT_ID = "2026-11-03-DAY-L1";
@@ -59,17 +64,110 @@ class CrewScheduleControllerTest {
     @MockitoBean
     private CrewDataCache crewDataCache;
 
+    private static final List<Line> LINES = List.of(new Line("L1", null, "Line 1"),
+            new Line(KC, "170610060000", "Линия 1"));
+    private static final List<ShiftTime> SHIFTS = List.of(ShiftTime.defaultFor(ShiftType.DAY),
+            ShiftTime.defaultFor(ShiftType.NIGHT));
+
+    private CrewData data;
+
+    /** Crews 1, 3, 4, 5 are the crews of line KC (for the generator); crew 2 has no line. */
     @BeforeEach
     void createDefaultVersion() {
         Crew crew1 = new Crew(1, "Cr1");
         crew1.setStaffCount(5);
         crew1.setLineId(KC);
         Crew crew2 = new Crew(2, "Cr2");
-        CrewData data = new CrewData(List.of(crew1, crew2),
-                List.of(new Employee(100, "Anna", crew1), new Employee(200, "Boris", crew2)));
+        List<Crew> crews = new java.util.ArrayList<>(List.of(crew1, crew2));
+        for (int id = 3; id <= 5; id++) {
+            Crew crew = new Crew(id, "Cr" + id);
+            crew.setLineId(KC);
+            crews.add(crew);
+        }
+        data = new CrewData(crews, List.of(new Employee(100, "Anna", crew1), new Employee(200, "Boris", crew2)));
         repository.create(SessionHeader.DEFAULT_SESSION_ID,
-                factory.createEmpty(YearMonth.of(2026, 11), List.of(new Line("L1", null, "Line 1"), new Line(KC, "170610060000", "Линия 1")),
-                        List.of(ShiftTime.defaultFor(ShiftType.DAY), ShiftTime.defaultFor(ShiftType.NIGHT)), data));
+                factory.createEmpty(YearMonth.of(2026, 11), LINES, SHIFTS, data));
+    }
+
+    @Test
+    void generateOneLine() throws Exception {
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"" + KC + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.generation.created").value(60))
+                .andExpect(jsonPath("$.generation.kept").value(0))
+                .andExpect(jsonPath("$.generation.messages", hasSize(0)))
+                .andExpect(jsonPath("$.lines[0].days", hasSize(0)))
+                .andExpect(jsonPath("$.lines[1].days", hasSize(30)))
+                // c0..c3 = 1, 3, 4, 5: DAY c0, c2, ...; NIGHT c1, c0, ...
+                .andExpect(jsonPath("$.lines[1].days[0].dayShift.crew.id").value(1))
+                .andExpect(jsonPath("$.lines[1].days[0].nightShift.crew.id").value(3))
+                .andExpect(jsonPath("$.lines[1].days[1].dayShift.crew.id").value(4))
+                .andExpect(jsonPath("$.warnings", hasSize(0)));
+
+        // Other changes do not have generation
+        mvc.perform(get("/crew-schedules/rotation"))
+                .andExpect(jsonPath("$.generation").doesNotExist())
+                .andExpect(jsonPath("$.lines[1].days", hasSize(30)));
+    }
+
+    @Test
+    void generateErrors() throws Exception {
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"startCrewId\": 1}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"" + KC + "\", \"startCrewId\": 2}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"L9\"}"))
+                .andExpect(status().isNotFound());
+
+        // Earlier crew shifts that do not fit one rotation
+        mvc.perform(json(post("/crew-schedules/crew-shifts"),
+                "{\"date\": \"2026-11-01\", \"type\": \"DAY\", \"lineId\": \"" + KC + "\", \"crewId\": 1}"))
+                .andExpect(status().isOk());
+        mvc.perform(json(post("/crew-schedules/crew-shifts"),
+                "{\"date\": \"2026-11-01\", \"type\": \"NIGHT\", \"lineId\": \"" + KC + "\", \"crewId\": 4}"))
+                .andExpect(status().isOk());
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"from\": \"2026-11-03\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("Выберите бригаду")));
+    }
+
+    @Test
+    void initWithAndWithoutGenerate() throws Exception {
+        when(crewDataCache.getLines(any())).thenReturn(LINES);
+        when(crewDataCache.getShifts()).thenReturn(SHIFTS);
+        when(crewDataCache.getAll(any())).thenReturn(data);
+
+        mvc.perform(post("/crew-schedules/init?month=2026-12"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.month").value("2026-12"))
+                .andExpect(jsonPath("$.lines[1].days", hasSize(0)))
+                .andExpect(jsonPath("$.generation").doesNotExist());
+
+        mvc.perform(post("/crew-schedules/init?month=2026-12&generate=true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[1].days", hasSize(31)))
+                .andExpect(jsonPath("$.lines[1].days[0].dayShift.crew.id").value(1))
+                .andExpect(jsonPath("$.generation.created").value(62))
+                .andExpect(jsonPath("$.generation.messages[0]").value("Линия L1: 0 бригад вместо 4, пропущена."));
+    }
+
+    @Test
+    void restWarningsInEveryResponse() throws Exception {
+        mvc.perform(json(post("/crew-schedules/crew-shifts"), shift("DAY", 1)))
+                .andExpect(jsonPath("$.warnings", hasSize(0)));
+
+        mvc.perform(json(post("/crew-schedules/crew-shifts"), shift("NIGHT", 1)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.warnings", hasSize(1)))
+                .andExpect(jsonPath("$.warnings[0].type").value("CREW_REST"))
+                .andExpect(jsonPath("$.warnings[0].crewShiftId").value("2026-11-03-NIGHT-L1"))
+                .andExpect(jsonPath("$.warnings[0].previousCrewShiftId").value(SHIFT_ID))
+                .andExpect(jsonPath("$.warnings[0].crewId").value(1))
+                .andExpect(jsonPath("$.warnings[0].restHours").value(0.0))
+                .andExpect(jsonPath("$.warnings[0].message").value(containsString("Бригада Cr1: отдых 0 ч")));
+
+        mvc.perform(delete("/crew-schedules/crew-shifts/2026-11-03-NIGHT-L1"))
+                .andExpect(jsonPath("$.warnings", hasSize(0)));
     }
 
     @Test
