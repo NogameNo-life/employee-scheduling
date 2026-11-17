@@ -16,7 +16,7 @@ import lombok.Setter;
 @Table(name = "PLR_BR", schema = "dbo")
 public class PlrBr {
 
-    /** Crew number, referenced by BD_CARD.BRID and PLR_RLBR.BRID. */
+    /** Crew number, referenced by PLR_TBBR.BRID. */
     @Id
     @Column(name = "BRID")
     public Integer crewId;
@@ -26,4 +26,8 @@ public class PlrBr {
 
     @Column(name = "OBJ")
     public String department;
+
+    /** People needed in the crew per shift. */
+    @Column(name = "NTB")
+    public Integer staffCount;
 }

@@ -4,9 +4,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -29,8 +27,7 @@ import lombok.Setter;
  * too ({@link #extraEmployees}, e.g. as substitutes). Only the differences are kept, so a change of the crew
  * itself still applies to all its shifts. Employees on an {@link Absence} (vacation, sick leave, dismissal) never
  * work, and the crew members are the employees who are in the crew on the date of the shift
- * ({@link Employee#getCrewOn}). The number of people per role can also be changed for this shift only
- * ({@link #composition}).
+ * ({@link Employee#getCrewOn}).
  */
 @Getter
 @Setter
@@ -56,10 +53,6 @@ public class CrewShift {
     /** Employees of other crews who work this shift too (only this one). */
     @JsonIgnore
     private Set<Employee> extraEmployees = new HashSet<>();
-
-    /** People needed per role in this shift only (instead of PLR_RLBR); null: the composition of the crew. */
-    @JsonIgnore
-    private Map<Role, Integer> composition;
 
     public CrewShift(String id, LocalDate date, ShiftType type, Line line, Crew crew) {
         this.id = id;
@@ -92,7 +85,7 @@ public class CrewShift {
         return crew.getEmployees().contains(employee) && crew.equals(employee.getCrewOn(date));
     }
 
-    /** Personnel numbers of {@link #getEmployees()}, sorted (ids only: a crew shift is in every position). */
+    /** Personnel numbers of {@link #getEmployees()}, sorted (ids only, the employees are in the version). */
     @JsonProperty
     public Set<Integer> getEmployeeIds() {
         return ids(getEmployees().stream());
@@ -115,18 +108,10 @@ public class CrewShift {
                 .filter(employee -> employee.isUnavailableOn(date)));
     }
 
-    /** Role id -> people needed in this shift, or null when the shift has the composition of the crew. */
-    @JsonProperty
-    public Map<Integer, Integer> getRoleCounts() {
-        return composition == null ? null : composition.entrySet().stream()
-                .collect(Collectors.toMap(entry -> entry.getKey().getId(), Map.Entry::getValue, Integer::sum, TreeMap::new));
-    }
-
-    /** People needed in this shift: from {@link #composition}, or the crew's {@code staffCount}. */
+    /** People needed in this shift: the crew's {@code staffCount}. */
     @JsonProperty
     public int getStaffCount() {
-        return composition == null ? crew.getStaffCount()
-                : composition.values().stream().mapToInt(Integer::intValue).sum();
+        return crew.getStaffCount();
     }
 
     private static Set<Integer> ids(Stream<Employee> employees) {

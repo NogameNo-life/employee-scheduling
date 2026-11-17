@@ -36,7 +36,7 @@ var byEmployeeTimeline = new vis.Timeline(byEmployeePanel, byEmployeeItemDataSet
 
 // Month shown in the timelines: the window is set again only when it changes, not after every edit
 let shownMonth = null;
-// Line id -> line, crews (CrewDetails) and roles of the version: for the crew picker and the crew list
+// Line id -> line and crews (CrewDetails) of the version: for the crew picker and the crew list
 const linesById = new Map();
 let crewDetailsList = [];
 // The whole version (GET /crew-schedules) for the "By employee" tab
@@ -71,18 +71,6 @@ $(document).ready(function () {
     }
   });
   $("#shiftPeopleModal").on("hidden.bs.modal", () => peopleDialogCrewShiftId = null);
-  $("#shiftPeopleModalCompositionSave").click(saveShiftComposition);
-  $("#shiftPeopleModalCompositionReset").click(() =>
-    changeShiftPeople(send("DELETE", `${crewShiftUrl(peopleDialogCrewShiftId)}/composition`)));
-  $("#shiftPeopleModalAddRole").on("change", event => {
-    const roleId = parseInt($(event.target).val());
-    const role = lastSchedule == null ? null : lastSchedule.roles.find(r => r.id === roleId);
-    if (role != null) {
-      $("#shiftPeopleModalComposition tbody").append(compositionRow(role, 0, 0));
-      $(event.target).find(`option[value="${roleId}"]`).remove();
-    }
-    $(event.target).val("");
-  });
   $("#employeeModal").on("hidden.bs.modal", () => employeeModalId = null);
   $("#employeeModalCrewSave").click(saveEmployeeCrew);
   $("#employeeModalAbsenceSave").click(saveAbsence);
@@ -170,7 +158,7 @@ function refreshLines() {
   });
 }
 
-// Crews of the version with their composition and all their employees, shown below the timeline
+// Crews of the version with all their employees, shown below the timeline
 function refreshCrews() {
   $.getJSON("/crew-schedules/crews", function (crews) {
     renderCrews(crews);
@@ -179,24 +167,22 @@ function refreshCrews() {
   });
 }
 
-// The whole version: people of every crew shift for the "By employee" tab, and the positions
-function refreshPositions() {
+// The whole version: people of every crew shift for the "By employee" tab
+function refreshPeople() {
   return $.getJSON("/crew-schedules", function (schedule) {
     lastSchedule = schedule;
-    const unassigned = schedule.positions.filter(position => position.employee == null).length;
-    $("#unassignedPositions").text(`Unassigned positions: ${unassigned} / ${schedule.positions.length}`);
     renderEmployees(schedule);
     renderShiftPeopleDialog();
     renderEmployeeDialog();
   }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Getting the positions failed.", xhr);
+    showError("Getting the schedule failed.", xhr);
   });
 }
 
 // The server answers every change of the crew schedule with the whole crew schedule
 function onRosterChanged(roster) {
   renderRoster(roster);
-  refreshPositions();
+  refreshPeople();
   refreshCrews();
 }
 
@@ -269,7 +255,7 @@ function addCrewShiftItem(crewShift) {
   if (crewShift.extraEmployeeIds.length > 0) {
     changes.push(`+${crewShift.extraEmployeeIds.length}`);
   }
-  const people = `${crewShift.employeeIds.length} / ${crewShift.staffCount}${crewShift.roleCounts == null ? "" : "*"} people`
+  const people = `${crewShift.employeeIds.length} / ${crewShift.staffCount} people`
     + (changes.length === 0 ? "" : ` (${changes.join(", ")})`);
   const element = $(`<div class="card-body p-2"/>`)
     .append($(`<h5 class="card-title mb-1"/>`).append(pin)
@@ -498,7 +484,6 @@ function renderShiftPeopleDialog() {
     return $(`<tr/>`).toggleClass("text-muted", absent)
       .append($(`<td/>`).text(i + 1))
       .append($(`<td/>`).text(employee.fullName).toggleClass("text-decoration-line-through", absent))
-      .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", ")))
       .append($(`<td/>`).text(statusText))
       .append(actions);
   });
@@ -508,7 +493,6 @@ function renderShiftPeopleDialog() {
       .append($(`<thead/>`).append($(`<tr/>`)
         .append($(`<th style="width: 2rem"/>`).text("#"))
         .append($(`<th/>`).text("Full name"))
-        .append($(`<th/>`).text("Roles"))
         .append($(`<th/>`).text("In this shift"))
         .append($(`<th/>`))))
       .append($(`<tbody/>`).append(rows)));
@@ -517,63 +501,9 @@ function renderShiftPeopleDialog() {
     .append(free.length === 0 ? $(`<option value=""/>`).text("Nobody is free at that time") : null)
     .append(free.map(other => employeeOption(other, crewShift.date)));
   $("#shiftPeopleModalAddButton").prop("disabled", free.length === 0);
-  renderShiftComposition(crewShift);
 }
 
-// People needed per role in this shift: the crew's numbers (PLR_RLBR), or the numbers changed for this shift only
-function renderShiftComposition(crewShift) {
-  const details = crewDetailsList.find(d => d.crew.id === crewShift.crew.id);
-  const crewCounts = new Map((details == null ? [] : details.roles).map(roleCount => [roleCount.role.id, roleCount.count]));
-  const shiftCounts = crewShift.roleCounts == null ? crewCounts
-    : new Map(Object.entries(crewShift.roleCounts).map(([roleId, count]) => [parseInt(roleId), count]));
-  const rolesById = new Map(lastSchedule.roles.map(role => [role.id, role]));
-  const roleIds = [...new Set([...crewCounts.keys(), ...shiftCounts.keys()])].filter(id => rolesById.has(id))
-    .sort((a, b) => rolesById.get(a).name.localeCompare(rolesById.get(b).name));
-
-  $("#shiftPeopleModalCompositionText").text(crewShift.roleCounts == null
-    ? "The crew's numbers. Change them here for this shift only."
-    : "Changed for this shift only (the crew's numbers are in the second column).");
-  $("#shiftPeopleModalComposition").empty().append($(`<table class="table table-sm align-middle mb-0 w-auto"/>`)
-    .append($(`<thead/>`).append($(`<tr/>`)
-      .append($(`<th/>`).text("Role"))
-      .append($(`<th/>`).text("Crew"))
-      .append($(`<th/>`).text("This shift"))))
-    .append($(`<tbody/>`).append(roleIds.map(id =>
-      compositionRow(rolesById.get(id), crewCounts.get(id) || 0, shiftCounts.get(id) || 0)))));
-  $("#shiftPeopleModalAddRole").empty()
-    .append($(`<option value=""/>`).text("Add a role..."))
-    .append(lastSchedule.roles.filter(role => !roleIds.includes(role.id))
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map(role => $(`<option/>`).val(role.id).text(role.name)));
-  $("#shiftPeopleModalCompositionReset").prop("disabled", crewShift.roleCounts == null);
-}
-
-function compositionRow(role, crewCount, shiftCount) {
-  return $(`<tr/>`)
-    .append($(`<td/>`).text(role.name))
-    .append($(`<td/>`).text(crewCount))
-    .append($(`<td/>`).append($(`<input type="number" min="0" max="50" class="form-control form-control-sm role-count"/>`)
-      .attr("data-role-id", role.id).val(shiftCount)));
-}
-
-function saveShiftComposition() {
-  const roles = [];
-  let valid = true;
-  $("#shiftPeopleModalComposition input[data-role-id]").each((i, input) => {
-    const count = Number($(input).val());
-    if (!Number.isInteger(count) || count < 0) {
-      valid = false;
-    }
-    roles.push({roleId: parseInt($(input).attr("data-role-id")), count: count});
-  });
-  if (!valid) {
-    showSimpleError("The number of people must be a whole number, 0 or more.");
-    return;
-  }
-  changeShiftPeople(send("PUT", `${crewShiftUrl(peopleDialogCrewShiftId)}/composition`, {roles: roles}));
-}
-
-// The dialog stays open; it is drawn again when the new version is loaded (refreshPositions)
+// The dialog stays open; it is drawn again when the new version is loaded (refreshPeople)
 function changeShiftPeople(request) {
   request.done(onRosterChanged)
     .fail(xhr => {
@@ -584,7 +514,7 @@ function changeShiftPeople(request) {
 
 // Gantt chart by employee: employees grouped by their crew (sorted by number), sorted by name within the crew.
 // A bar is a crew shift the employee works: with their own crew, or as a substitute in another crew (dashed).
-// A grey bar is a shift of their crew they do not work (absent). The label has the roles, and the shifts and
+// A grey bar is a shift of their crew they do not work (absent). The label has the shifts and
 // hours of the month. Double-click a bar to take the employee off the shift or replace them, or an empty place
 // to add the employee to a crew shift at that time.
 function renderEmployees(schedule) {
@@ -621,12 +551,10 @@ function renderEmployees(schedule) {
           .append($(`<span class="crew-color ms-2"/>`).css("background-color", pickColor("crew" + crew.id)))).html()
       });
       employees.forEach(employee => {
-        const roles = employee.roles.map(role => role.name).sort().join(", ");
         byEmployeeGroupDataSet.add({
           id: employee.id, order: order++,
           content: $(`<div/>`)
             .append($(`<div class="employee-link"/>`).text(employee.fullName))
-            .append(roles ? $(`<div class="small"/>`).text(roles) : null)
             .append(employee.crewChanges.map(change =>
               $(`<div class="small"/>`).text(`\u2192 ${crewName(change.crew)} from ${change.from}`)))
             .append($(`<div class="text-muted small"/>`)
@@ -853,8 +781,6 @@ function renderEmployeeDialog() {
   }
   const first = JSJoda.YearMonth.parse(lastSchedule.month).atDay(1).toString();
   $("#employeeModalTitle").text(`${employee.fullName} (${employee.id})`);
-  $("#employeeModalRoles").text(employee.roles.length === 0 ? "No roles"
-    : "Roles: " + employee.roles.map(role => role.name).sort().join(", "));
 
   $("#employeeModalCrews").empty()
     .append($(`<li/>`).text(`From ${first}: ${crewName(employee.crew)}`))
@@ -917,7 +843,7 @@ function shiftName(type) {
   return type === "DAY" ? "day shift (08:00-20:00)" : "night shift (20:00-08:00)";
 }
 
-// Crew list: one accordion item per crew; the body has the composition and all employees of the crew.
+// Crew list: one accordion item per crew; the body has all employees of the crew.
 // Crews that were open stay open when the list is drawn again after a change.
 function renderCrews(crews) {
   crewDetailsList = crews;
@@ -946,9 +872,6 @@ function renderCrews(crews) {
         .text(`${details.employees.length} employees, ${crew.staffCount} per shift`));
 
     const body = $(`<div class="accordion-body py-2"/>`)
-      .append($(`<h4 class="h6"/>`).text("People per shift"))
-      .append(renderComposition(details))
-      .append($(`<h4 class="h6 mt-3"/>`).text("Employees"))
       .append(renderCrewEmployees(details));
 
     crewList.append($(`<div class="accordion-item"/>`)
@@ -956,20 +879,6 @@ function renderCrews(crews) {
       .append($(`<div class="accordion-collapse collapse"/>`).toggleClass("show", open).attr("id", bodyId)
         .append(body)));
   });
-}
-
-// People needed per shift for each role of the crew (PLR_RLBR), read-only
-function renderComposition(details) {
-  if (details.roles.length === 0) {
-    return $(`<p class="text-muted mb-0"/>`).text("No roles.");
-  }
-  return $(`<table class="table table-sm mb-0 w-auto"/>`)
-    .append($(`<thead/>`).append($(`<tr/>`)
-      .append($(`<th/>`).text("Role"))
-      .append($(`<th/>`).text("People"))))
-    .append($(`<tbody/>`).append(details.roles.map(roleCount => $(`<tr/>`)
-      .append($(`<td/>`).text(roleCount.role.name))
-      .append($(`<td/>`).text(roleCount.count)))));
 }
 
 // Employees of the crew at the start of the month; the crew column moves an employee to another crew for the whole
@@ -991,7 +900,6 @@ function renderCrewEmployees(details) {
       .append($(`<td/>`).text(employee.id))
       .append($(`<td/>`).append($(`<span class="employee-link"/>`).text(employee.fullName)
         .click(() => openEmployeeDialog(employee.id))))
-      .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", ")))
       .append($(`<td class="small"/>`).append(changes.map(text => $(`<div/>`).text(text))))
       .append($(`<td/>`).append(crewSelect));
   });
@@ -1000,7 +908,6 @@ function renderCrewEmployees(details) {
       .append($(`<th style="width: 3rem"/>`).text("#"))
       .append($(`<th style="width: 10rem"/>`).text("Personnel number"))
       .append($(`<th/>`).text("Full name"))
-      .append($(`<th/>`).text("Roles"))
       .append($(`<th/>`).text("Crew changes, absences"))
       .append($(`<th style="width: 10rem"/>`).text("Crew (whole month)"))))
     .append($(`<tbody/>`).append(rows));

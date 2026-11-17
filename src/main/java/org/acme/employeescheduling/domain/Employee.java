@@ -2,7 +2,6 @@ package org.acme.employeescheduling.domain;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -15,7 +14,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/** Employee (BD_CARD.TABN). Can be assigned to a {@link Position}. */
+/** Employee (BD_CARD.TABN). */
 @Getter
 @Setter
 @NoArgsConstructor
@@ -33,21 +32,13 @@ public class Employee {
     /** Moves to another crew during the month, sorted by date (see {@link #getCrewOn}). */
     private List<CrewChange> crewChanges = new ArrayList<>();
 
-    /** Roles this employee can perform (PLR_RLTB). */
-    private Set<Role> roles = new HashSet<>();
-
     /** Vacation, sick leave, dismissal: entered by the user, they do not overlap. */
     private List<Absence> absences = new ArrayList<>();
 
-    public Employee(Integer id, String fullName, Crew crew, Set<Role> roles) {
+    public Employee(Integer id, String fullName, Crew crew) {
         this.id = id;
         this.fullName = fullName;
         this.crew = crew;
-        this.roles = roles;
-    }
-
-    public boolean canPerform(Role role) {
-        return roles.contains(role);
     }
 
     /** The crew on {@code date}: {@link #crew}, or the crew of the last change up to that date. */

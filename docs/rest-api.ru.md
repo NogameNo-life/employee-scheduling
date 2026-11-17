@@ -14,10 +14,9 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
 - Даты — `yyyy-MM-dd`, месяц — `yyyy-MM`, дата и время — `yyyy-MM-ddTHH:mm:ss`.
 - Тип смены `type`: `DAY` (08:00–20:00) или `NIGHT` (20:00–08:00 следующего дня).
 - Id смены бригады: `{date}-{type}-{lineId}`, например `2026-11-03-DAY-101`.
-- Id позиции: `{id смены}-{roleId}-{номер}`, например `2026-11-03-DAY-101-5-0`.
-- Id сотрудника — табельный номер (TABN), id бригады — BRID, id роли — RLID.
+- Id сотрудника — табельный номер (TABN), id бригады — BRID.
 
-В примерах ниже: месяц ноябрь 2026, линия `101` «Линия 1», бригады 1 и 2, роли 5 «Фасовщик» и 7 «Наладчик».
+В примерах ниже: месяц ноябрь 2026, линия `101` «Линия 1», бригады 1 и 2.
 
 ### Ошибки
 
@@ -61,7 +60,6 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
             "absentEmployeeIds": [1001],
             "extraEmployeeIds": [2001],
             "unavailableEmployeeIds": [1004],
-            "roleCounts": null,
             "staffCount": 3,
             "start": "2026-11-03T08:00:00",
             "end": "2026-11-03T20:00:00"
@@ -86,14 +84,12 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
 | `absentEmployeeIds` | Члены бригады, снятые только с этой смены |
 | `extraEmployeeIds` | Сотрудники других бригад, добавленные в эту смену (замены) |
 | `unavailableEmployeeIds` | Члены бригады и замены, которые не работают из-за отсутствия (отпуск, больничный, ...) |
-| `roleCounts` | Роль → число людей только для этой смены; `null` — состав бригады (PLR_RLBR) |
-| `staffCount` | Сколько людей нужно в смене: из `roleCounts` или `crew.staffCount` |
+| `staffCount` | Сколько людей нужно в смене: `crew.staffCount` (PLR_BR.NTB) |
 | `pinned` | Закреплённую смену нельзя перенести или удалить |
 
 ### Ответ `CrewDetails[]`
 
-Список бригад (по номеру) с линиями, где бригада работает в этой версии, составом по ролям (только чтение,
-по имени роли) и сотрудниками (по ФИО). `crew` сотрудника — бригада на начало месяца, переводы — в `crewChanges`.
+Список бригад (по номеру) с линиями, где бригада работает в этой версии, и сотрудниками (по ФИО). `crew` сотрудника — бригада на начало месяца, переводы — в `crewChanges`.
 Сотрудник попадает в список бригады из своего `crew`.
 
 ```json
@@ -101,10 +97,6 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
   {
     "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
     "lines": [{ "id": "101", "name": "Линия 1" }],
-    "roles": [
-      { "role": { "id": 7, "name": "Наладчик" }, "count": 1 },
-      { "role": { "id": 5, "name": "Фасовщик" }, "count": 2 }
-    ],
     "employees": [
       {
         "id": 1001,
@@ -113,7 +105,6 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
         "crewChanges": [
           { "from": "2026-11-15", "crew": { "id": 2, "name": "Бригада 2", "staffCount": 3 } }
         ],
-        "roles": [{ "id": 5, "name": "Фасовщик" }],
         "absences": [
           { "id": "0b6e2f9a-8c1d-4e57-a3f0-5d2c9b7e1a44", "type": "VACATION", "from": "2026-11-20", "to": "2026-11-30" }
         ]
@@ -127,8 +118,7 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
 
 ### GET `/crew-schedules` — вся версия
 
-Месяц, линии, бригады, роли, сотрудники, смены бригад и позиции (по одной на человека каждой роли в смене).
-Ответ большой: каждая позиция содержит смену бригады целиком.
+Месяц, линии, бригады, сотрудники и смены бригад.
 
 ```http
 GET /crew-schedules
@@ -140,14 +130,12 @@ X-Session-Id: a1b2c3
   "month": "2026-11",
   "lines": [{ "id": "101", "name": "Линия 1" }],
   "crews": [{ "id": 1, "name": "Бригада 1", "staffCount": 3 }],
-  "roles": [{ "id": 5, "name": "Фасовщик" }, { "id": 7, "name": "Наладчик" }],
   "employees": [
     {
       "id": 1002,
       "fullName": "Петров Иван Сергеевич",
       "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
       "crewChanges": [],
-      "roles": [{ "id": 5, "name": "Фасовщик" }],
       "absences": []
     }
   ],
@@ -163,28 +151,13 @@ X-Session-Id: a1b2c3
       "absentEmployeeIds": [1001],
       "extraEmployeeIds": [2001],
       "unavailableEmployeeIds": [],
-      "roleCounts": null,
       "staffCount": 3,
       "start": "2026-11-03T08:00:00",
       "end": "2026-11-03T20:00:00"
     }
-  ],
-  "positions": [
-    {
-      "id": "2026-11-03-DAY-101-5-0",
-      "crewShift": { "id": "2026-11-03-DAY-101", "...": "как в crewShifts" },
-      "role": { "id": 5, "name": "Фасовщик" },
-      "pinned": false,
-      "employee": null,
-      "date": "2026-11-03",
-      "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
-      "shiftType": "DAY"
-    }
   ]
 }
 ```
-
-`employee` позиции пока всегда `null`: назначение сотрудников на позиции ещё не сделано.
 
 ### GET `/crew-schedules/rotation` — график бригад по линиям
 
@@ -337,44 +310,6 @@ Content-Type: application/json
 | 400 | Нет `employeeId` или `substituteId`; сотрудник заменяет сам себя |
 | 404 | Нет такой смены или сотрудника |
 | 409 | `employeeId` не работает в смене; `substituteId` отсутствует, уже работает в смене или в это время на другой линии |
-
-### PUT `/crew-schedules/crew-shifts/{id}/composition` — число людей по ролям для смены
-
-Только для этой смены, вместо состава бригады (PLR_RLBR). Роли с `count: 0` не нужны в смене; одинаковые `roleId`
-складываются. Позиции смены создаются заново, оставшиеся позиции сохраняют сотрудника. Если числа совпадают
-с составом бригады, `roleCounts` становится `null`.
-
-```http
-PUT /crew-schedules/crew-shifts/2026-11-03-DAY-101/composition
-X-Session-Id: a1b2c3
-Content-Type: application/json
-
-{
-  "roles": [
-    { "roleId": 5, "count": 3 },
-    { "roleId": 7, "count": 1 }
-  ]
-}
-```
-
-Ответ: [`RotationResponse`](#ответ-rotationresponse), у смены `"roleCounts": { "5": 3, "7": 1 }` и
-`"staffCount": 4`.
-
-| Код | Когда |
-| --- | --- |
-| 400 | Нет `roleId` или `count`; `count` меньше 0 или больше 50 |
-| 404 | Нет такой смены или роли |
-
-Чтобы вернуть состав бригады, используйте DELETE (ниже).
-
-### DELETE `/crew-schedules/crew-shifts/{id}/composition` — вернуть состав бригады
-
-```http
-DELETE /crew-schedules/crew-shifts/2026-11-03-DAY-101/composition
-X-Session-Id: a1b2c3
-```
-
-Ответ: [`RotationResponse`](#ответ-rotationresponse), у смены `"roleCounts": null`.
 
 ## Сотрудники
 

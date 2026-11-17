@@ -16,7 +16,6 @@ import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
-import org.acme.employeescheduling.domain.Role;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,7 +58,7 @@ public class CrewRosterService {
 
     /**
      * Crews of a version for the crew list in the frontend, sorted by number: the lines the crew works on
-     * in this version, its composition (sorted by role name) and all its employees, sorted by name.
+     * in this version and all its employees, sorted by name.
      */
     public List<CrewDetails> toCrewDetails(CrewSchedule schedule) {
         Map<Integer, Set<Line>> linesByCrew = new LinkedHashMap<>();
@@ -75,11 +74,6 @@ public class CrewRosterService {
                 .sorted(Comparator.comparing(Crew::getId))
                 .map(crew -> new CrewDetails(crew,
                         List.copyOf(linesByCrew.getOrDefault(crew.getId(), Set.of())),
-                        schedule.getComposition().getOrDefault(crew.getId(), Map.of()).entrySet().stream()
-                                .map(entry -> new RoleCount(entry.getKey(), entry.getValue()))
-                                .sorted(Comparator.comparing((RoleCount roleCount) -> roleCount.role().getName())
-                                        .thenComparing(roleCount -> roleCount.role().getId()))
-                                .toList(),
                         employeesByCrew.getOrDefault(crew.getId(), List.of()).stream()
                                 .sorted(Comparator.comparing(Employee::getFullName).thenComparing(Employee::getId))
                                 .toList()))
@@ -94,12 +88,8 @@ public class CrewRosterService {
 
     /**
      * @param lines     lines the crew works on in the version (empty: the crew has no crew shifts)
-     * @param roles     people needed per shift for each role (PLR_RLBR, read-only)
      * @param employees employees of the crew (PLR_TBBR, changed in the version); each one also has {@code crew}
      */
-    public record CrewDetails(Crew crew, List<Line> lines, List<RoleCount> roles, List<Employee> employees) {
-    }
-
-    public record RoleCount(Role role, int count) {
+    public record CrewDetails(Crew crew, List<Line> lines, List<Employee> employees) {
     }
 }

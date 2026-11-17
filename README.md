@@ -36,6 +36,6 @@ All endpoints work on the caller's schedule version (header `X-Session-Id`, `def
 
 | Method | Path                                    | Meaning                                              |
 |--------|-----------------------------------------|------------------------------------------------------|
-| GET    | `/crew-schedules`                       | The whole version: crew shifts and positions         |
+| GET    | `/crew-schedules`                       | The whole version: crews, employees and crew shifts  |
 | GET    | `/crew-schedules/rotation`              | Day crew and night crew for every line and day       |
 | POST   | `/crew-schedules/init?date=yyyy-MM-dd`  | Reload data from the DB and generate a new version   |

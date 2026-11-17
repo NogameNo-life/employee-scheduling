@@ -2,9 +2,7 @@ package org.acme.employeescheduling.service;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,16 +18,13 @@ import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
-import org.acme.employeescheduling.domain.Position;
-import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.domain.ShiftType;
 
 /**
  * Manual changes to one schedule version: the crew schedule (which crew works on which line and shift),
  * the default composition of a crew (its employees, also from a date on), absences of employees (vacation, sick
- * leave, dismissal), and the people of one crew shift (absent employees, substitutes and the number of people per
- * role, see {@link CrewShift}). The changes stay in the version (in memory); nothing is written to the DB.
- * Roles are read-only.
+ * leave, dismissal), and the people of one crew shift (absent employees and substitutes, see {@link CrewShift}).
+ * The changes stay in the version (in memory); nothing is written to the DB.
  *
  * <p>
  * Errors: {@link NoSuchElementException} (unknown line, crew, employee or crew shift),
@@ -40,19 +35,10 @@ import org.acme.employeescheduling.domain.ShiftType;
 @Service
 public class CrewScheduleEditor {
 
-    /** Upper limit for the number of people per role in one shift (a typo guard). */
-    static final int MAX_PEOPLE_PER_ROLE = 50;
-
-    private final CrewScheduleFactory scheduleFactory;
-
-    public CrewScheduleEditor(CrewScheduleFactory scheduleFactory) {
-        this.scheduleFactory = scheduleFactory;
-    }
-
     /** Puts a crew on a line for one shift. Every line shift has at most one crew. */
     public CrewShift addCrewShift(CrewSchedule schedule, CrewShiftRequest request) {
         CrewShift crewShift = newCrewShift(schedule, request, null);
-        add(schedule, crewShift);
+        schedule.getCrewShifts().add(crewShift);
         return crewShift;
     }
 
@@ -64,21 +50,20 @@ public class CrewScheduleEditor {
         CrewShift current = requireUnpinned(schedule, crewShiftId, "moved");
         CrewShift moved = newCrewShift(schedule, request, current);
         if (moved.getId().equals(current.getId()) && moved.getCrew().equals(current.getCrew())) {
-            return current; // Dropped at the same place: keep the positions with their employees
+            return current; // Dropped at the same place: nothing changes
         }
         if (moved.getDate().equals(current.getDate()) && moved.getType() == current.getType()
                 && moved.getCrew().equals(current.getCrew())) {
             moved.getAbsentEmployees().addAll(current.getAbsentEmployees());
             moved.getExtraEmployees().addAll(current.getExtraEmployees());
-            moved.setComposition(current.getComposition());
         }
-        remove(schedule, current);
-        add(schedule, moved);
+        schedule.getCrewShifts().remove(current);
+        schedule.getCrewShifts().add(moved);
         return moved;
     }
 
     public void removeCrewShift(CrewSchedule schedule, String crewShiftId) {
-        remove(schedule, requireUnpinned(schedule, crewShiftId, "removed"));
+        schedule.getCrewShifts().remove(requireUnpinned(schedule, crewShiftId, "removed"));
     }
 
     public CrewShift setPinned(CrewSchedule schedule, String crewShiftId, boolean pinned) {
@@ -97,8 +82,7 @@ public class CrewScheduleEditor {
      * all their shifts from that date). Later crew changes of the employee are replaced. On the 1st of the month
      * it is the crew for the whole month. Their absences from shifts of a crew they are no longer in, and their
      * extra shifts with a crew they are now in, are no longer needed. Where they already work another shift at
-     * the same time as a shift of the new crew, they are absent from the new crew's shift. Positions of shifts
-     * they no longer work lose this employee.
+     * the same time as a shift of the new crew, they are absent from the new crew's shift.
      */
     public void moveEmployee(CrewSchedule schedule, int employeeId, int crewId, LocalDate from) {
         Employee employee = findEmployee(schedule, employeeId);
@@ -151,7 +135,6 @@ public class CrewScheduleEditor {
                 }
             }
         }
-        clearPositionsNotWorked(schedule, employee);
     }
 
     /**
@@ -181,7 +164,6 @@ public class CrewScheduleEditor {
         });
         employee.getAbsences().add(absence);
         employee.getAbsences().sort((a, b) -> a.from().compareTo(b.from()));
-        clearPositionsNotWorked(schedule, employee);
         return absence;
     }
 
@@ -190,70 +172,6 @@ public class CrewScheduleEditor {
         if (!employee.getAbsences().removeIf(absence -> absence.id().equals(absenceId))) {
             throw new NoSuchElementException("Absence " + absenceId + " of " + employee.getFullName()
                     + " was not found in this schedule version.");
-        }
-    }
-
-    /**
-     * Sets the number of people per role for this crew shift only (instead of the crew's composition, PLR_RLBR).
-     * Null or empty: the shift has the composition of the crew again. The positions of the shift are made again;
-     * positions that stay keep their employee.
-     */
-    public void setShiftComposition(CrewSchedule schedule, String crewShiftId, Map<Integer, Integer> countsByRoleId) {
-        CrewShift crewShift = findCrewShift(schedule, crewShiftId);
-        Map<Role, Integer> composition = toComposition(schedule, countsByRoleId);
-        // The same numbers as the crew's composition: no change for this shift
-        crewShift.setComposition(composition == null || composition.equals(crewComposition(schedule, crewShift.getCrew()))
-                ? null : composition);
-        replacePositions(schedule, crewShift);
-    }
-
-    /** Role id -> count as role -> count, without roles of 0 people; null when there are no counts. */
-    private static Map<Role, Integer> toComposition(CrewSchedule schedule, Map<Integer, Integer> countsByRoleId) {
-        if (countsByRoleId == null || countsByRoleId.isEmpty()) {
-            return Map.of();
-        }
-        Map<Role, Integer> composition = new HashMap<>();
-        for (Map.Entry<Integer, Integer> entry : countsByRoleId.entrySet()) {
-            Role role = find(schedule.getRoles(), r -> r.getId().equals(entry.getKey()), "Role " + entry.getKey());
-            Integer count = entry.getValue();
-            if (count == null || count < 0 || count > MAX_PEOPLE_PER_ROLE) {
-                throw new IllegalArgumentException("The number of people for role " + role + " must be 0 to "
-                        + MAX_PEOPLE_PER_ROLE + ", got: " + count + ".");
-            }
-            if (count > 0) {
-                composition.put(role, count);
-            }
-        }
-        return composition;
-    }
-
-    /** Makes the positions of the crew shift again; positions with the same id keep their employee. */
-    private void replacePositions(CrewSchedule schedule, CrewShift crewShift) {
-        Map<String, Position> oldPositions = new HashMap<>();
-        schedule.getPositions().stream().filter(position -> position.getCrewShift().equals(crewShift))
-                .forEach(position -> oldPositions.put(position.getId(), position));
-        schedule.getPositions().removeIf(position -> position.getCrewShift().equals(crewShift));
-        for (Position position : createPositions(schedule, crewShift)) {
-            Position old = oldPositions.get(position.getId());
-            if (old != null) {
-                position.setEmployee(old.getEmployee());
-                position.setPinned(old.isPinned());
-            }
-            schedule.getPositions().add(position);
-        }
-    }
-
-    private static Map<Role, Integer> crewComposition(CrewSchedule schedule, Crew crew) {
-        return schedule.getComposition().getOrDefault(crew.getId(), Map.of());
-    }
-
-    /** Positions of shifts the employee does not work (any more) lose this employee. */
-    private static void clearPositionsNotWorked(CrewSchedule schedule, Employee employee) {
-        for (Position position : schedule.getPositions()) {
-            if (employee.equals(position.getEmployee()) && !position.getCrewShift().isWorkedBy(employee)) {
-                position.setEmployee(null);
-                position.setPinned(false);
-            }
         }
     }
 
@@ -270,12 +188,6 @@ public class CrewScheduleEditor {
         }
         if (!crewShift.getExtraEmployees().remove(employee)) {
             crewShift.getAbsentEmployees().add(employee);
-        }
-        for (Position position : schedule.getPositions()) {
-            if (position.getCrewShift().equals(crewShift) && employee.equals(position.getEmployee())) {
-                position.setEmployee(null);
-                position.setPinned(false);
-            }
         }
     }
 
@@ -334,7 +246,7 @@ public class CrewScheduleEditor {
      *
      * @param ignored the crew shift that is being moved: it does not block its own new place
      */
-    private CrewShift newCrewShift(CrewSchedule schedule, CrewShiftRequest request, CrewShift ignored) {
+    private static CrewShift newCrewShift(CrewSchedule schedule, CrewShiftRequest request, CrewShift ignored) {
         if (request == null || request.date() == null || request.type() == null || request.lineId() == null
                 || request.crewId() == null) {
             throw new IllegalArgumentException("date, type, lineId and crewId are required.");
@@ -379,22 +291,8 @@ public class CrewScheduleEditor {
         }
     }
 
-    private void add(CrewSchedule schedule, CrewShift crewShift) {
-        schedule.getCrewShifts().add(crewShift);
-        schedule.getPositions().addAll(createPositions(schedule, crewShift));
-    }
 
-    private List<Position> createPositions(CrewSchedule schedule, CrewShift crewShift) {
-        return scheduleFactory.createPositions(crewShift, crewShift.getComposition() != null
-                ? crewShift.getComposition() : crewComposition(schedule, crewShift.getCrew()));
-    }
-
-    private void remove(CrewSchedule schedule, CrewShift crewShift) {
-        schedule.getCrewShifts().remove(crewShift);
-        schedule.getPositions().removeIf(position -> position.getCrewShift().equals(crewShift));
-    }
-
-    private CrewShift requireUnpinned(CrewSchedule schedule, String crewShiftId, String action) {
+    private static CrewShift requireUnpinned(CrewSchedule schedule, String crewShiftId, String action) {
         CrewShift crewShift = findCrewShift(schedule, crewShiftId);
         if (crewShift.isPinned()) {
             throw new IllegalStateException("Crew shift " + crewShift + " is pinned and cannot be " + action

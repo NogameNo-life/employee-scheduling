@@ -13,7 +13,6 @@ import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Line;
-import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.entity.plr.PlrLines;
 import org.acme.employeescheduling.repository.plr.CrewRepository;
 import org.acme.employeescheduling.repository.plr.LineRepository;
@@ -23,7 +22,7 @@ import org.slf4j.LoggerFactory;
 /**
  * Master data kept in memory: {@link CrewData} per department and all production lines.
  * Filled when the application starts by {@link CrewRosterService} (like LoadDataService in
- * food-packaging-quarkus). Call {@link #refresh()} after crews, roles or employees are changed in the DB.
+ * food-packaging-quarkus). Call {@link #refresh()} after crews or employees are changed in the DB.
  */
 @Service
 public class CrewDataCache {
@@ -87,13 +86,9 @@ public class CrewDataCache {
     /** Data of all loaded departments together: crews of different departments can share the schedule. */
     public CrewData getAll() {
         List<CrewData> all = List.copyOf(dataByDepartment.get().values());
-        Map<Integer, Map<Role, Integer>> composition = new HashMap<>();
-        all.forEach(data -> composition.putAll(data.composition()));
         return new CrewData(
                 all.stream().flatMap(data -> data.crews().stream()).distinct().toList(),
-                all.stream().flatMap(data -> data.roles().stream()).distinct().toList(),
-                all.stream().flatMap(data -> data.employees().stream()).distinct().toList(),
-                composition);
+                all.stream().flatMap(data -> data.employees().stream()).distinct().toList());
     }
 
     public Optional<Line> getLine(String lineId) {

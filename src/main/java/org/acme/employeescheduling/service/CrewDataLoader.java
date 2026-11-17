@@ -1,47 +1,35 @@
 package org.acme.employeescheduling.service;
 
-import static java.util.stream.Collectors.groupingBy;
 import static java.util.stream.Collectors.toMap;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.springframework.stereotype.Service;
 
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Employee;
-import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.entity.plr.PlrBr;
-import org.acme.employeescheduling.entity.plr.PlrRlbr;
-import org.acme.employeescheduling.entity.plr.PlrRltb;
-import org.acme.employeescheduling.entity.plr.PlrRole;
 import org.acme.employeescheduling.entity.plr.PlrTbbr;
 import org.acme.employeescheduling.entity.tabu.BdCard;
-import org.acme.employeescheduling.repository.plr.CrewCompositionRepository;
 import org.acme.employeescheduling.repository.plr.CrewRepository;
 import org.acme.employeescheduling.repository.plr.EmployeeCrewRepository;
 import org.acme.employeescheduling.repository.tabu.EmployeeRepository;
-import org.acme.employeescheduling.repository.plr.EmployeeRoleRepository;
-import org.acme.employeescheduling.repository.plr.RoleRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Loads crews, roles, employees and crew composition for one department.
+ * Loads crews and employees for one department.
  *
  * <p>
- * Exactly 6 queries, no matter how many employees there are (no N+1):
+ * Exactly 3 queries, no matter how many employees there are (no N+1):
  * every table is read once and joined in memory with maps.
  * Subqueries are used instead of "IN (:ids)" because SQL Server allows
  * at most 2100 parameters per query.
  * Employees and their crews come from PLR_TBBR. Names (BD_CARD) are in another database (tabu2),
  * so they are joined with the other tables in memory only.
- * Roles are loaded, but not used for employees yet.
  */
 @Service
 public class CrewDataLoader {
@@ -49,86 +37,34 @@ public class CrewDataLoader {
         private static final Logger LOGGER = LoggerFactory.getLogger(CrewDataLoader.class);
 
         private final CrewRepository crewRepository;
-        private final RoleRepository roleRepository;
-        private final EmployeeRoleRepository employeeRoleRepository;
         private final EmployeeCrewRepository employeeCrewRepository;
         private final EmployeeRepository employeeRepository;
-        private final CrewCompositionRepository crewCompositionRepository;
 
-        public CrewDataLoader(CrewRepository crewRepository, RoleRepository roleRepository,
-                        EmployeeRoleRepository employeeRoleRepository, EmployeeCrewRepository employeeCrewRepository,
-                        EmployeeRepository employeeRepository, CrewCompositionRepository crewCompositionRepository) {
+        public CrewDataLoader(CrewRepository crewRepository, EmployeeCrewRepository employeeCrewRepository,
+                        EmployeeRepository employeeRepository) {
                 this.crewRepository = crewRepository;
-                this.roleRepository = roleRepository;
-                this.employeeRoleRepository = employeeRoleRepository;
                 this.employeeCrewRepository = employeeCrewRepository;
                 this.employeeRepository = employeeRepository;
-                this.crewCompositionRepository = crewCompositionRepository;
         }
 
         public CrewData load(String department) {
-                // 1) Crews
+                // 1) Crews, with the number of people per shift (PLR_BR.NTB)
                 List<PlrBr> crewRows = crewRepository.findByDepartment(department);
                 Map<Integer, Crew> crewsById = crewRows.stream()
                                 .filter(r -> r.crewId != null)
-                                .collect(toMap(r -> r.crewId, r -> new Crew(r.crewId, r.crewName), (a, b) -> a));
+                                .collect(toMap(r -> r.crewId, CrewDataLoader::toCrew, (a, b) -> a));
 
-                // 2) Crew composition: number of people per crew, and crew -> role -> number of people per shift
-                List<PlrRlbr> compositionRows = crewCompositionRepository.findByDepartment(department);
-                staffCountByCrew(compositionRows).forEach((crewId, count) -> {
-                        Crew crew = crewsById.get(crewId);
-                        if (crew != null) {
-                                crew.setStaffCount(count);
-                        }
-                });
+                // 2) Employee -> crew, 3) names
+                List<Employee> employees = loadEmployees(department, crewsById);
 
-                // 3) Roles
-                List<PlrRole> roleRows = roleRepository.findByDepartment(department);
-                Map<Integer, Role> rolesById = roleRows.stream()
-                                .filter(r -> r.roleId != null)
-                                .collect(toMap(r -> r.roleId, r -> new Role(r.roleId, r.roleName), (a, b) -> a));
-
-                Map<Integer, Map<Role, Integer>> composition = new HashMap<>();
-                compositionRows.stream()
-                                .filter(r -> rolesById.containsKey(r.roleId) && r.numberOfStaff != null
-                                                && r.numberOfStaff > 0)
-                                .collect(groupingBy(r -> r.crewId))
-                                .forEach((crewId, rows) -> composition.put(crewId, rows.stream()
-                                                .collect(toMap(r -> rolesById.get(r.roleId), r -> r.numberOfStaff,
-                                                                Integer::sum))));
-
-                // 4) Employee -> roles
-                List<PlrRltb> employeeRoleRows = employeeRoleRepository.findByDepartment(department);
-                Map<Integer, Set<Role>> rolesByEmployeeId = new HashMap<>();
-                for (PlrRltb row : employeeRoleRows) {
-                        Role role = rolesById.get(row.roleId);
-                        if (role != null) {
-                                rolesByEmployeeId.computeIfAbsent(row.employeeId, id -> new HashSet<>()).add(role);
-                        }
-                }
-
-                // 5) Employee -> crew, 6) names
-                List<Employee> employees = loadEmployees(department, crewsById, rolesByEmployeeId);
-
-                return new CrewData(
-                                List.copyOf(crewsById.values()),
-                                List.copyOf(rolesById.values()),
-                                employees,
-                                composition);
+                return new CrewData(List.copyOf(crewsById.values()), employees);
         }
 
-        /**
-         * Number of people per shift for every crew: PLR_RLBR has one row per crew and role, so the NPERS of all
-         * rows of a crew are added up. Example: (BRID 1, RLID 1, NPERS 1) and (BRID 1, RLID 2, NPERS 3) give 4.
-         */
-        static Map<Integer, Integer> staffCountByCrew(List<PlrRlbr> compositionRows) {
-                Map<Integer, Integer> staffCount = new HashMap<>();
-                for (PlrRlbr row : compositionRows) {
-                        if (row.crewId != null && row.numberOfStaff != null && row.numberOfStaff > 0) {
-                                staffCount.merge(row.crewId, row.numberOfStaff, Integer::sum);
-                        }
-                }
-                return staffCount;
+        /** The crew of a PLR_BR row: the name is trimmed (CHAR column), no NTB means 0 people. */
+        static Crew toCrew(PlrBr row) {
+                Crew crew = new Crew(row.crewId, row.crewName == null ? String.valueOf(row.crewId) : row.crewName.trim());
+                crew.setStaffCount(row.staffCount == null ? 0 : Math.max(row.staffCount, 0));
+                return crew;
         }
 
         /**
@@ -136,8 +72,7 @@ public class CrewDataLoader {
          * Names come from BD_CARD (tabu2). If tabu2 cannot be read, or an employee is not in BD_CARD,
          * the personnel number is used as the name, so the crews are still complete.
          */
-        private List<Employee> loadEmployees(String department, Map<Integer, Crew> crewsById,
-                        Map<Integer, Set<Role>> rolesByEmployeeId) {
+        private List<Employee> loadEmployees(String department, Map<Integer, Crew> crewsById) {
                 // One crew per employee; if PLR_TBBR has more, the first one is used
                 Map<Integer, Crew> crewByEmployeeId = new LinkedHashMap<>();
                 int withMoreCrews = 0;
@@ -164,8 +99,7 @@ public class CrewDataLoader {
                                 name = String.valueOf(employeeId);
                         }
                         Crew crew = entry.getValue();
-                        Employee employee = new Employee(employeeId, name, crew,
-                                        rolesByEmployeeId.getOrDefault(employeeId, new HashSet<>()));
+                        Employee employee = new Employee(employeeId, name, crew);
                         crew.getEmployees().add(employee);
                         employees.add(employee);
                 }

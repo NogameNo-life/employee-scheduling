@@ -4,9 +4,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
@@ -61,7 +59,7 @@ public class CrewScheduleController {
         this.clock = clock;
     }
 
-    /** The whole version: positions with assigned employees. */
+    /** The whole version: lines, crews, employees and crew shifts. */
     @GetMapping
     public CrewSchedule get(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
@@ -87,7 +85,7 @@ public class CrewScheduleController {
         return crewDataCache.getLines();
     }
 
-    /** Crews of the caller's version with their lines, composition by role (read-only) and all their employees. */
+    /** Crews of the caller's version with their lines and all their employees. */
     @GetMapping("/crews")
     public List<CrewDetails> crews(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
@@ -178,35 +176,7 @@ public class CrewScheduleController {
     }
 
     /**
-     * The number of people per role for this crew shift only. An empty list: the composition of the crew again
-     * (same as DELETE).
-     */
-    @PutMapping("/crew-shifts/{crewShiftId}/composition")
-    public RotationResponse setShiftComposition(
-            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @PathVariable String crewShiftId, @RequestBody CompositionRequest request) {
-        Map<Integer, Integer> counts = new LinkedHashMap<>();
-        for (RoleCountRequest roleCount : request.roles() == null ? List.<RoleCountRequest>of() : request.roles()) {
-            if (roleCount == null || roleCount.roleId() == null || roleCount.count() == null) {
-                throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, "roleId and count are required.");
-            }
-            counts.merge(roleCount.roleId(), roleCount.count(), Integer::sum);
-        }
-        return toResponse(sessionId, sessionService.edit(sessionId,
-                schedule -> editor.setShiftComposition(schedule, crewShiftId, counts)));
-    }
-
-    /** The crew shift has the composition of the crew again. */
-    @DeleteMapping("/crew-shifts/{crewShiftId}/composition")
-    public RotationResponse resetShiftComposition(
-            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @PathVariable String crewShiftId) {
-        return toResponse(sessionId, sessionService.edit(sessionId,
-                schedule -> editor.setShiftComposition(schedule, crewShiftId, null)));
-    }
-
-    /**
-     * Moves an employee to another crew: changes the default composition of both crews, from {@code from} on
+     * Moves an employee to another crew: changes the employees of both crews, from {@code from} on
      * (yyyy-MM-dd, in the version's month; missing: the whole month).
      */
     @PutMapping("/employees/{employeeId}/crew")
@@ -266,9 +236,4 @@ public class CrewScheduleController {
     public record EmployeeCrewRequest(Integer crewId, LocalDate from) {
     }
 
-    public record CompositionRequest(List<RoleCountRequest> roles) {
-    }
-
-    public record RoleCountRequest(Integer roleId, Integer count) {
-    }
 }

@@ -10,16 +10,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.YearMonth;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 
 import org.acme.employeescheduling.config.ClockConfig;
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
-import org.acme.employeescheduling.domain.Role;
 import org.acme.employeescheduling.repository.CrewScheduleRepository;
 import org.acme.employeescheduling.service.CrewData;
 import org.acme.employeescheduling.service.CrewDataCache;
@@ -57,11 +54,10 @@ class CrewScheduleControllerTest {
     @BeforeEach
     void createDefaultVersion() {
         Crew crew1 = new Crew(1, "Cr1");
+        crew1.setStaffCount(5);
         Crew crew2 = new Crew(2, "Cr2");
-        Role packer = new Role(10, "Packer");
-        CrewData data = new CrewData(List.of(crew1, crew2), List.of(packer),
-                List.of(new Employee(100, "Anna", crew1, new HashSet<>()), new Employee(200, "Boris", crew2,
-                        new HashSet<>())), Map.of(1, Map.of(packer, 2)));
+        CrewData data = new CrewData(List.of(crew1, crew2),
+                List.of(new Employee(100, "Anna", crew1), new Employee(200, "Boris", crew2)));
         repository.create(SessionHeader.DEFAULT_SESSION_ID,
                 factory.createEmpty(YearMonth.of(2026, 11), List.of(new Line("L1", "Line 1")), data));
     }
@@ -73,6 +69,7 @@ class CrewScheduleControllerTest {
                 .andExpect(jsonPath("$.month").value("2026-11"))
                 .andExpect(jsonPath("$.lines[0].days[0].dayShift.id").value(SHIFT_ID))
                 .andExpect(jsonPath("$.lines[0].days[0].dayShift.crew.id").value(1))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.staffCount").value(5))
                 .andExpect(jsonPath("$.lines[0].days[0].nightShift").doesNotExist());
 
         // The same line shift again: conflict
@@ -138,7 +135,7 @@ class CrewScheduleControllerTest {
     }
 
     @Test
-    void absencesCrewChangesAndShiftCompositionForOneShift() throws Exception {
+    void absencesAndCrewChanges() throws Exception {
         mvc.perform(json(post("/crew-schedules/crew-shifts"), shift("DAY", 1))).andExpect(status().isOk());
 
         // Vacation: Anna does not work the shift of her crew
@@ -166,16 +163,6 @@ class CrewScheduleControllerTest {
         mvc.perform(delete("/crew-schedules/employees/200/crew-changes/2026-11-03")).andExpect(status().isOk());
         mvc.perform(get("/crew-schedules/rotation"))
                 .andExpect(jsonPath("$.lines[0].days[0].dayShift.employeeIds", hasSize(0)));
-
-        // 3 packers in this shift only, then back to the crew's 2
-        mvc.perform(json(put("/crew-schedules/crew-shifts/" + SHIFT_ID + "/composition"),
-                "{\"roles\": [{\"roleId\": 10, \"count\": 3}]}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.lines[0].days[0].dayShift.staffCount").value(3))
-                .andExpect(jsonPath("$.lines[0].days[0].dayShift.roleCounts.10").value(3));
-        mvc.perform(delete("/crew-schedules/crew-shifts/" + SHIFT_ID + "/composition"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.lines[0].days[0].dayShift.roleCounts").isEmpty());
     }
 
     @Test

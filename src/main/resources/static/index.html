@@ -23,7 +23,6 @@
     .people-link, .employee-link { cursor: pointer; }
     .employee-link:hover { text-decoration: underline; }
     .vis-item.vis-background.absence { background-color: rgba(239, 41, 41, .12); }
-    .role-count { width: 5rem; }
     .crew-color { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; }
   </style>
 </head>
@@ -64,7 +63,6 @@
     <button id="refreshButton" type="button" class="btn btn-secondary">
       <span class="fas fa-refresh"></span> Refresh
     </button>
-    <span id="unassignedPositions" class="ms-2 align-middle fw-bold"></span>
 
     <div class="float-end">
       <ul class="nav nav-pills" role="tablist">
@@ -88,9 +86,9 @@
 
   <h2 class="h4">Crews <span id="crewCount" class="text-muted fs-6"></span></h2>
   <p class="text-muted small mb-2">
-    Click a crew (here, or its name in the "By employee" timeline) to see its roles and its employees (the default composition of
+    Click a crew (here, or its name in the "By employee" timeline) to see its employees (the people of
     its shifts). The crew column changes the crew of an employee for the whole month; click the employee's name for a
-    crew change from a date, vacation, sick leave or dismissal. Roles are read-only. Changes are kept only in your
+    crew change from a date, vacation, sick leave or dismissal. Changes are kept only in your
     schedule version.
   </p>
   <div class="accordion mb-4" id="crewList"></div>
@@ -149,16 +147,6 @@
         <p id="shiftPeopleModalSlot" class="mb-1"></p>
         <p class="text-muted small mb-2">Changes are made only for this shift, not for the crew.</p>
         <div id="shiftPeopleModalList"></div>
-        <h6 class="mt-3">People needed in this shift</h6>
-        <p class="text-muted small mb-1" id="shiftPeopleModalCompositionText"></p>
-        <div id="shiftPeopleModalComposition"></div>
-        <div class="d-flex gap-2 mt-1">
-          <select id="shiftPeopleModalAddRole" class="form-select form-select-sm w-auto"></select>
-          <button type="button" class="btn btn-sm btn-primary" id="shiftPeopleModalCompositionSave">Save the numbers</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary" id="shiftPeopleModalCompositionReset">
-            Back to the crew's numbers
-          </button>
-        </div>
         <label for="shiftPeopleModalAdd" class="form-label mt-2">Add an employee to this shift</label>
         <div class="input-group">
           <select id="shiftPeopleModalAdd" class="form-select"></select>
@@ -185,8 +173,6 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body">
-        <p id="employeeModalRoles" class="text-muted mb-2"></p>
-
         <h6>Crew</h6>
         <ul id="employeeModalCrews" class="list-unstyled mb-2"></ul>
         <div class="row g-2 align-items-end mb-3">
