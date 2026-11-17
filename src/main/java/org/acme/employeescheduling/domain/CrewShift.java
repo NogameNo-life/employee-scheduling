@@ -39,7 +39,11 @@ public class CrewShift {
     private String id;
 
     private LocalDate date;
-    private ShiftType type;
+
+    /** Type and times of the shift (PLR_SM of the version). */
+    @JsonIgnore
+    private ShiftTime time;
+
     private Line line;
     private Crew crew;
 
@@ -54,10 +58,10 @@ public class CrewShift {
     @JsonIgnore
     private Set<Employee> extraEmployees = new HashSet<>();
 
-    public CrewShift(String id, LocalDate date, ShiftType type, Line line, Crew crew) {
+    public CrewShift(String id, LocalDate date, ShiftTime time, Line line, Crew crew) {
         this.id = id;
         this.date = date;
-        this.type = type;
+        this.time = time;
         this.line = line;
         this.crew = crew;
     }
@@ -118,18 +122,27 @@ public class CrewShift {
         return employees.map(Employee::getId).collect(Collectors.toCollection(TreeSet::new));
     }
 
-    public LocalDateTime getStart() {
-        return date.atTime(type.getStart());
+    public ShiftType getType() {
+        return time.type();
     }
 
+    /** Start on {@link #date}, from PLR_SM. */
+    public LocalDateTime getStart() {
+        return time.startOn(date);
+    }
+
+    /** End, from PLR_SM: on the next day if the end time is not after the start time (night shift). */
     public LocalDateTime getEnd() {
-        return type == ShiftType.NIGHT
-                ? date.plusDays(1).atTime(type.getEnd())
-                : date.atTime(type.getEnd());
+        return time.endOn(date);
+    }
+
+    /** Length of the shift in hours, from its times. */
+    public double getHours() {
+        return time.hours();
     }
 
     @Override
     public String toString() {
-        return date + " " + type + " " + line + " " + crew;
+        return date + " " + getType() + " " + line + " " + crew;
     }
 }

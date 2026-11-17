@@ -2,6 +2,7 @@ package org.acme.employeescheduling.domain;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -21,12 +22,21 @@ import lombok.Setter;
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Employee {
 
+    /** Order of the employees of a crew: by position (employees without one last), then by name. */
+    public static final Comparator<Employee> BY_POSITION_AND_NAME = Comparator
+            .comparing(Employee::getPosition, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Employee::getFullName, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Employee::getId);
+
     @EqualsAndHashCode.Include
     private Integer id;
 
     private String fullName;
 
-    /** The crew this employee belongs to at the start of the month (PLR_TBBR). */
+    /** Position in the crew, for display (PLR_TB.POS); null: not set. */
+    private Integer position;
+
+    /** The crew this employee belongs to at the start of the month (PLR_TB). */
     private Crew crew;
 
     /** Moves to another crew during the month, sorted by date (see {@link #getCrewOn}). */

@@ -26,7 +26,13 @@ public class Crew {
     private int staffCount;
 
     /**
-     * Employees of this crew (PLR_TBBR). Not in the JSON: a crew is repeated in every crew shift,
+     * The crew's own line: PLR_BR.KC (= {@link Line#getId()}), trimmed; null if not set. Only information:
+     * the user can still put the crew on any line.
+     */
+    private String lineId;
+
+    /**
+     * Employees of this crew (PLR_TB), sorted by position and name. Not in the JSON: a crew is repeated in every crew shift,
      * so the list would be sent many times. Every employee has {@code crew} instead.
      */
     @JsonIgnore

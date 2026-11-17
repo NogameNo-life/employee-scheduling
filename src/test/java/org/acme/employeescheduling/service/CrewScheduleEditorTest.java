@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.YearMonth;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -15,6 +16,7 @@ import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.domain.ShiftType;
 import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
@@ -27,6 +29,11 @@ class CrewScheduleEditorTest {
 
     private final CrewScheduleFactory factory = new CrewScheduleFactory();
     private final CrewScheduleEditor editor = new CrewScheduleEditor();
+    /** Times from PLR_SM that differ from the defaults: the crew shifts must use these. */
+    private static final List<ShiftTime> SHIFTS = List.of(
+            new ShiftTime(ShiftType.DAY, LocalTime.of(7, 30), LocalTime.of(19, 0), "446"),
+            new ShiftTime(ShiftType.NIGHT, LocalTime.of(19, 0), LocalTime.of(7, 30), "60;61"));
+
     private CrewSchedule schedule;
 
     @BeforeEach
@@ -38,7 +45,22 @@ class CrewScheduleEditorTest {
         CrewData data = new CrewData(List.of(crew1, crew2),
                 List.of(new Employee(100, "Anna", crew1), new Employee(200, "Boris", crew2)));
         schedule = factory.createEmpty(YearMonth.of(2026, 11),
-                List.of(new Line("L1", "Line 1"), new Line("L2", "Line 2")), data);
+                List.of(new Line("L1", null, "Line 1"), new Line("L2", null, "Line 2")), SHIFTS, data);
+    }
+
+    @Test
+    void crewShiftTimesComeFromTheShiftTimesOfTheVersion() {
+        CrewShift day = editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+        CrewShift night = editor.addCrewShift(schedule, request(DAY1, ShiftType.NIGHT, "L1", 2));
+
+        assertThat(day.getId()).isEqualTo(DAY1 + "-DAY-L1");
+        assertThat(day.getStart()).isEqualTo(DAY1.atTime(7, 30));
+        assertThat(day.getEnd()).isEqualTo(DAY1.atTime(19, 0));
+        assertThat(day.getHours()).isEqualTo(11.5);
+        assertThat(night.getId()).isEqualTo(DAY1 + "-NIGHT-L1");
+        assertThat(night.getStart()).isEqualTo(DAY1.atTime(19, 0));
+        assertThat(night.getEnd()).isEqualTo(DAY1.plusDays(1).atTime(7, 30));
+        assertThat(night.getHours()).isEqualTo(12.5);
     }
 
     @Test

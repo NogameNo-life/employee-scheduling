@@ -9,6 +9,7 @@ import java.util.List;
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.exception.ScheduleException;
 import org.acme.employeescheduling.repository.CrewScheduleRepository.ScheduleVersion;
 import org.acme.employeescheduling.service.CrewDataCache;
@@ -77,12 +78,13 @@ public class CrewScheduleController {
     }
 
     /**
-     * All active lines (loaded at startup), sorted by name. Also works when there is no version yet,
+     * Lines that are active in the current month (loaded at startup), sorted by name. Also works when there is
+     * no version yet,
      * so the frontend can show the lines before the first "New empty month".
      */
     @GetMapping("/lines")
     public List<Line> lines() {
-        return crewDataCache.getLines();
+        return crewDataCache.getLines(YearMonth.now(clock));
     }
 
     /** Crews of the caller's version with their lines and all their employees. */
@@ -220,10 +222,13 @@ public class CrewScheduleController {
 
     private RotationResponse toResponse(String sessionId, ScheduleVersion version) {
         Rotation rotation = rosterService.toRotation(version.schedule());
-        return new RotationResponse(sessionId, version.id(), rotation.month(), rotation.lines());
+        return new RotationResponse(sessionId, version.id(), rotation.month(), version.schedule().getShifts(),
+                rotation.lines());
     }
 
-    public record RotationResponse(String sessionId, String versionId, YearMonth month, List<LineSchedule> lines) {
+    /** @param shifts times of the shift types (PLR_SM), e.g. for snapping a dragged crew shift */
+    public record RotationResponse(String sessionId, String versionId, YearMonth month, List<ShiftTime> shifts,
+            List<LineSchedule> lines) {
     }
 
     public record PinnedRequest(boolean pinned) {

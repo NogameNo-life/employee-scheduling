@@ -1,5 +1,6 @@
 package org.acme.employeescheduling.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -9,6 +10,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.YearMonth;
 import java.util.List;
 
@@ -17,6 +21,8 @@ import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.ShiftType;
+import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.repository.CrewScheduleRepository;
 import org.acme.employeescheduling.service.CrewData;
 import org.acme.employeescheduling.service.CrewDataCache;
@@ -41,6 +47,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class CrewScheduleControllerTest {
 
     private static final String SHIFT_ID = "2026-11-03-DAY-L1";
+    /** Real line codes (PLR_LC.KC) have Cyrillic letters. */
+    private static final String KC = "БерЦГС1";
 
     @Autowired
     private MockMvc mvc;
@@ -55,11 +63,13 @@ class CrewScheduleControllerTest {
     void createDefaultVersion() {
         Crew crew1 = new Crew(1, "Cr1");
         crew1.setStaffCount(5);
+        crew1.setLineId(KC);
         Crew crew2 = new Crew(2, "Cr2");
         CrewData data = new CrewData(List.of(crew1, crew2),
                 List.of(new Employee(100, "Anna", crew1), new Employee(200, "Boris", crew2)));
         repository.create(SessionHeader.DEFAULT_SESSION_ID,
-                factory.createEmpty(YearMonth.of(2026, 11), List.of(new Line("L1", "Line 1")), data));
+                factory.createEmpty(YearMonth.of(2026, 11), List.of(new Line("L1", null, "Line 1"), new Line(KC, "170610060000", "Линия 1")),
+                        List.of(ShiftTime.defaultFor(ShiftType.DAY), ShiftTime.defaultFor(ShiftType.NIGHT)), data));
     }
 
     @Test
@@ -67,9 +77,14 @@ class CrewScheduleControllerTest {
         mvc.perform(json(post("/crew-schedules/crew-shifts"), shift("DAY", 1)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.month").value("2026-11"))
+                .andExpect(jsonPath("$.shifts[0].type").value("DAY"))
+                .andExpect(jsonPath("$.shifts[0].start").value("08:00:00"))
+                .andExpect(jsonPath("$.shifts[1].end").value("08:00:00"))
+                .andExpect(jsonPath("$.shifts[1].hours").value(12.0))
                 .andExpect(jsonPath("$.lines[0].days[0].dayShift.id").value(SHIFT_ID))
                 .andExpect(jsonPath("$.lines[0].days[0].dayShift.crew.id").value(1))
                 .andExpect(jsonPath("$.lines[0].days[0].dayShift.staffCount").value(5))
+                .andExpect(jsonPath("$.lines[0].days[0].dayShift.crew.lineId").value(KC))
                 .andExpect(jsonPath("$.lines[0].days[0].nightShift").doesNotExist());
 
         // The same line shift again: conflict
@@ -93,6 +108,28 @@ class CrewScheduleControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.lines[0].days", hasSize(0)));
         mvc.perform(delete("/crew-schedules/crew-shifts/2026-11-03-NIGHT-L1")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void crewShiftIdWithACyrillicLineCodeInTheUrl() throws Exception {
+        String id = "2026-11-03-NIGHT-" + KC;
+        mvc.perform(json(post("/crew-schedules/crew-shifts"),
+                "{\"date\": \"2026-11-03\", \"type\": \"NIGHT\", \"lineId\": \"" + KC + "\", \"crewId\": 1}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[1].line.id").value(KC))
+                .andExpect(jsonPath("$.lines[1].line.krc").value("170610060000"))
+                .andExpect(jsonPath("$.lines[1].days[0].nightShift.id").value(id));
+
+        // The id encoded as app.js does it (encodeURIComponent): %D0%91%D0%B5...
+        URI pinnedUrl = URI.create("/crew-schedules/crew-shifts/" + encode(id) + "/pinned");
+        assertThat(pinnedUrl.getRawPath()).contains("%D0%91");
+        mvc.perform(json(put(pinnedUrl), "{\"pinned\": true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[1].days[0].nightShift.pinned").value(true));
+        mvc.perform(json(put(pinnedUrl), "{\"pinned\": false}")).andExpect(status().isOk());
+        mvc.perform(delete(URI.create("/crew-schedules/crew-shifts/" + encode(id))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[1].days", hasSize(0)));
     }
 
     @Test
@@ -177,6 +214,11 @@ class CrewScheduleControllerTest {
 
     private static String shift(String type, int crewId) {
         return "{\"date\": \"2026-11-03\", \"type\": \"" + type + "\", \"lineId\": \"L1\", \"crewId\": " + crewId + "}";
+    }
+
+    /** Like encodeURIComponent for the characters of a crew shift id (no spaces). */
+    private static String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     private static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder request, String body) {

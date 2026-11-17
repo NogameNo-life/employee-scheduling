@@ -11,14 +11,15 @@ import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Employee;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.domain.ShiftType;
 import org.acme.employeescheduling.service.CrewRosterService.CrewDetails;
 import org.junit.jupiter.api.Test;
 
 class CrewRosterServiceTest {
 
-    private static final List<Line> LINES = List.of(new Line("L1", "Line 1"), new Line("L2", "Line 2"),
-            new Line("L3", "Line 3"));
+    private static final List<Line> LINES = List.of(new Line("L1", null, "Line 1"), new Line("L2", null, "Line 2"),
+            new Line("L3", null, "Line 3"));
 
     @Test
     void crewDetailsHaveLinesAndEmployeesSortedByName() {
@@ -27,13 +28,13 @@ class CrewRosterServiceTest {
         Line line = LINES.get(0);
         LocalDate date = LocalDate.of(2026, 11, 1);
         List<CrewShift> crewShifts = List.of(
-                new CrewShift("s1", date, ShiftType.DAY, line, crew1),
-                new CrewShift("s2", date, ShiftType.NIGHT, line, crew1));
+                new CrewShift("s1", date, ShiftTime.defaultFor(ShiftType.DAY), line, crew1),
+                new CrewShift("s2", date, ShiftTime.defaultFor(ShiftType.NIGHT), line, crew1));
         List<Employee> employees = List.of(
                 new Employee(10, "Petrov", crew1),
                 new Employee(11, "Ivanov", crew1),
                 new Employee(20, "Sidorov", crew2));
-        CrewSchedule schedule = new CrewSchedule(YearMonth.of(2026, 11), LINES, List.of(crew2, crew1), employees,
+        CrewSchedule schedule = new CrewSchedule(YearMonth.of(2026, 11), LINES, List.of(), List.of(crew2, crew1), employees,
                 crewShifts);
         CrewRosterService service = new CrewRosterService(null, null);
 

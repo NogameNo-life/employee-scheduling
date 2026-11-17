@@ -12,11 +12,15 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
 - Изменения хранятся только в версии (в памяти), в БД ничего не пишется. Версия удаляется после 24 ч простоя.
 - Тело запроса — JSON (`Content-Type: application/json`).
 - Даты — `yyyy-MM-dd`, месяц — `yyyy-MM`, дата и время — `yyyy-MM-ddTHH:mm:ss`.
-- Тип смены `type`: `DAY` (08:00–20:00) или `NIGHT` (20:00–08:00 следующего дня).
-- Id смены бригады: `{date}-{type}-{lineId}`, например `2026-11-03-DAY-101`.
+- Тип смены `type`: `DAY` или `NIGHT` (в БД — `PLR_SM.SM` `1` / `2`). Время смен — из `PLR_SM` (поле `shifts`
+  в ответах), сейчас 08:00–20:00 и 20:00–08:00 следующего дня.
+- Id линии `lineId` — код `KC` из `PLR_LC`, например `БерЦГС1`.
+- Id смены бригады: `{date}-{type}-{lineId}`, например `2026-11-03-DAY-БерЦГС1`. В URL id нужно кодировать
+  (`encodeURIComponent`): `/crew-schedules/crew-shifts/2026-11-03-DAY-%D0%91%D0%B5%D1%80%D0%A6%D0%93%D0%A11`.
 - Id сотрудника — табельный номер (TABN), id бригады — BRID.
 
-В примерах ниже: месяц ноябрь 2026, линия `101` «Линия 1», бригады 1 и 2.
+В примерах ниже: месяц ноябрь 2026, линия `БерЦГС1` (KRC `170610060000`) «Линия 1», бригады 1 и 2.
+Для краткости id смен в URL показаны без кодирования.
 
 ### Ошибки
 
@@ -43,24 +47,29 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
   "sessionId": "a1b2c3",
   "versionId": "6f1d0c5e-3a7b-4a59-9c1e-2b8f0e4d7a10",
   "month": "2026-11",
+  "shifts": [
+    { "type": "DAY", "start": "08:00:00", "end": "20:00:00", "sng": "446", "hours": 12.0 },
+    { "type": "NIGHT", "start": "20:00:00", "end": "08:00:00", "sng": "60;61", "hours": 12.0 }
+  ],
   "lines": [
     {
-      "line": { "id": "101", "name": "Линия 1" },
+      "line": { "id": "БерЦГС1", "krc": "170610060000", "name": "Линия 1" },
       "days": [
         {
           "date": "2026-11-03",
           "dayShift": {
-            "id": "2026-11-03-DAY-101",
+            "id": "2026-11-03-DAY-БерЦГС1",
             "date": "2026-11-03",
             "type": "DAY",
-            "line": { "id": "101", "name": "Линия 1" },
-            "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
+            "line": { "id": "БерЦГС1", "krc": "170610060000", "name": "Линия 1" },
+            "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3, "lineId": "БерЦГС1" },
             "pinned": false,
             "employeeIds": [1002, 1003, 2001],
             "absentEmployeeIds": [1001],
             "extraEmployeeIds": [2001],
             "unavailableEmployeeIds": [1004],
             "staffCount": 3,
+            "hours": 12.0,
             "start": "2026-11-03T08:00:00",
             "end": "2026-11-03T20:00:00"
           },
@@ -69,12 +78,19 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
       ]
     },
     {
-      "line": { "id": "102", "name": "Линия 2" },
+      "line": { "id": "БерЦГС2", "krc": "170610070000", "name": "Линия 2" },
       "days": []
     }
   ]
 }
 ```
+
+`shifts` — время смен версии из `PLR_SM` (`ShiftTime`): `start` / `end` — время начала и конца (`end` не позже
+`start` — конец на следующий день), `sng` — коды `PLR_SM.SNG` как в таблице, `hours` — длина смены.
+Фронтенд берёт отсюда время для привязки перетаскиваемой смены и для подписей.
+
+Поля линии: `id` — `PLR_LC.KC`, `krc` — старый код `PLR_LC.KRC`, `name` — `PLR_PLINES.SNM` по `KRC` (или `KC`).
+Поле бригады `lineId` — её линия (`PLR_BR.KC`, может быть `null`); бригаду можно поставить на любую линию.
 
 Поля смены бригады (`CrewShift`):
 
@@ -86,24 +102,27 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
 | `unavailableEmployeeIds` | Члены бригады и замены, которые не работают из-за отсутствия (отпуск, больничный, ...) |
 | `staffCount` | Сколько людей нужно в смене: `crew.staffCount` (PLR_BR.NTB) |
 | `pinned` | Закреплённую смену нельзя перенести или удалить |
+| `start`, `end`, `hours` | Начало, конец и длина смены по времени из `shifts` |
 
 ### Ответ `CrewDetails[]`
 
-Список бригад (по номеру) с линиями, где бригада работает в этой версии, и сотрудниками (по ФИО). `crew` сотрудника — бригада на начало месяца, переводы — в `crewChanges`.
+Список бригад (по номеру) с линиями, где бригада работает в этой версии, и сотрудниками (по `position` —
+`PLR_TB.POS`, без позиции в конце, — затем по ФИО). `crew` сотрудника — бригада на начало месяца, переводы — в `crewChanges`.
 Сотрудник попадает в список бригады из своего `crew`.
 
 ```json
 [
   {
-    "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
-    "lines": [{ "id": "101", "name": "Линия 1" }],
+    "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3, "lineId": "БерЦГС1" },
+    "lines": [{ "id": "БерЦГС1", "krc": "170610060000", "name": "Линия 1" }],
     "employees": [
       {
         "id": 1001,
         "fullName": "Иванова Анна Петровна",
-        "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
+        "position": null,
+        "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3, "lineId": "БерЦГС1" },
         "crewChanges": [
-          { "from": "2026-11-15", "crew": { "id": 2, "name": "Бригада 2", "staffCount": 3 } }
+          { "from": "2026-11-15", "crew": { "id": 2, "name": "Бригада 2", "staffCount": 3, "lineId": "БерЦГС1" } }
         ],
         "absences": [
           { "id": "0b6e2f9a-8c1d-4e57-a3f0-5d2c9b7e1a44", "type": "VACATION", "from": "2026-11-20", "to": "2026-11-30" }
@@ -128,30 +147,33 @@ X-Session-Id: a1b2c3
 ```json
 {
   "month": "2026-11",
-  "lines": [{ "id": "101", "name": "Линия 1" }],
-  "crews": [{ "id": 1, "name": "Бригада 1", "staffCount": 3 }],
+  "lines": [{ "id": "БерЦГС1", "krc": "170610060000", "name": "Линия 1" }],
+  "shifts": [ ... как в RotationResponse ... ],
+  "crews": [{ "id": 1, "name": "Бригада 1", "staffCount": 3, "lineId": "БерЦГС1" }],
   "employees": [
     {
       "id": 1002,
       "fullName": "Петров Иван Сергеевич",
-      "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
+      "position": 1,
+      "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3, "lineId": "БерЦГС1" },
       "crewChanges": [],
       "absences": []
     }
   ],
   "crewShifts": [
     {
-      "id": "2026-11-03-DAY-101",
+      "id": "2026-11-03-DAY-БерЦГС1",
       "date": "2026-11-03",
       "type": "DAY",
-      "line": { "id": "101", "name": "Линия 1" },
-      "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3 },
+      "line": { "id": "БерЦГС1", "krc": "170610060000", "name": "Линия 1" },
+      "crew": { "id": 1, "name": "Бригада 1", "staffCount": 3, "lineId": "БерЦГС1" },
       "pinned": false,
       "employeeIds": [1002, 1003, 2001],
       "absentEmployeeIds": [1001],
       "extraEmployeeIds": [2001],
       "unavailableEmployeeIds": [],
       "staffCount": 3,
+      "hours": 12.0,
       "start": "2026-11-03T08:00:00",
       "end": "2026-11-03T20:00:00"
     }
@@ -179,12 +201,13 @@ X-Session-Id: a1b2c3
 
 ### GET `/crew-schedules/lines` — линии
 
-Работает без версии и без заголовка (линии загружаются отдельно при запуске). Отсортированы по имени.
+Линии, которые действуют в текущем месяце (период `PLR_LC.DTBEG`..`DTEND`). Работает без версии и без заголовка
+(линии загружаются отдельно при запуске). Отсортированы по имени.
 
 ```json
 [
-  { "id": "101", "name": "Линия 1" },
-  { "id": "102", "name": "Линия 2" }
+  { "id": "БерЦГС1", "krc": "170610060000", "name": "Линия 1" },
+  { "id": "БерЦГС2", "krc": "170610070000", "name": "Линия 2" }
 ]
 ```
 
@@ -192,7 +215,8 @@ X-Session-Id: a1b2c3
 
 ### POST `/crew-schedules/init?month=yyyy-MM` — новая пустая версия
 
-Перечитывает данные из БД и создаёт для сессии новую версию на месяц без смен бригад. Без `month` — текущий месяц.
+Перечитывает данные из БД (линии месяца, время смен, бригады и сотрудников `PLR_TB` на месяц) и создаёт для
+сессии новую версию на месяц без смен бригад. Без `month` — текущий месяц.
 Заменяется только версия этой сессии.
 
 ```http
@@ -213,7 +237,7 @@ POST /crew-schedules/crew-shifts
 X-Session-Id: a1b2c3
 Content-Type: application/json
 
-{ "date": "2026-11-03", "type": "DAY", "lineId": "101", "crewId": 1 }
+{ "date": "2026-11-03", "type": "DAY", "lineId": "БерЦГС1", "crewId": 1 }
 ```
 
 Ответ: [`RotationResponse`](#ответ-rotationresponse).
@@ -230,11 +254,11 @@ Content-Type: application/json
 линия. Снятые сотрудники и замены сохраняются только при переносе на другую линию в то же время с той же бригадой.
 
 ```http
-PUT /crew-schedules/crew-shifts/2026-11-03-DAY-101
+PUT /crew-schedules/crew-shifts/2026-11-03-DAY-БерЦГС1
 X-Session-Id: a1b2c3
 Content-Type: application/json
 
-{ "date": "2026-11-04", "type": "NIGHT", "lineId": "101", "crewId": 2 }
+{ "date": "2026-11-04", "type": "NIGHT", "lineId": "БерЦГС1", "crewId": 2 }
 ```
 
 Ответ: [`RotationResponse`](#ответ-rotationresponse). Ошибки — как у POST, плюс 404 (нет такой смены) и
@@ -243,7 +267,7 @@ Content-Type: application/json
 ### DELETE `/crew-schedules/crew-shifts/{id}` — удалить смену
 
 ```http
-DELETE /crew-schedules/crew-shifts/2026-11-03-DAY-101
+DELETE /crew-schedules/crew-shifts/2026-11-03-DAY-БерЦГС1
 X-Session-Id: a1b2c3
 ```
 
@@ -252,7 +276,7 @@ X-Session-Id: a1b2c3
 ### PUT `/crew-schedules/crew-shifts/{id}/pinned` — закрепить / открепить
 
 ```http
-PUT /crew-schedules/crew-shifts/2026-11-03-DAY-101/pinned
+PUT /crew-schedules/crew-shifts/2026-11-03-DAY-БерЦГС1/pinned
 X-Session-Id: a1b2c3
 Content-Type: application/json
 
@@ -270,7 +294,7 @@ Content-Type: application/json
 Член бригады, снятый со смены, снова работает в ней; сотрудник другой бригады добавляется как замена.
 
 ```http
-PUT /crew-schedules/crew-shifts/2026-11-03-DAY-101/employees/2001
+PUT /crew-schedules/crew-shifts/2026-11-03-DAY-БерЦГС1/employees/2001
 X-Session-Id: a1b2c3
 ```
 
@@ -284,7 +308,7 @@ X-Session-Id: a1b2c3
 ### DELETE `/crew-schedules/crew-shifts/{id}/employees/{employeeId}` — сотрудник не работает в смене
 
 ```http
-DELETE /crew-schedules/crew-shifts/2026-11-03-DAY-101/employees/1001
+DELETE /crew-schedules/crew-shifts/2026-11-03-DAY-БерЦГС1/employees/1001
 X-Session-Id: a1b2c3
 ```
 
@@ -296,7 +320,7 @@ X-Session-Id: a1b2c3
 Одним шагом: `employeeId` не работает в этой смене, `substituteId` работает вместо него.
 
 ```http
-POST /crew-schedules/crew-shifts/2026-11-03-DAY-101/replacements
+POST /crew-schedules/crew-shifts/2026-11-03-DAY-БерЦГС1/replacements
 X-Session-Id: a1b2c3
 Content-Type: application/json
 

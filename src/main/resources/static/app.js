@@ -49,6 +49,11 @@ let employeeDialog = null;
 let peopleDialogCrewShiftId = null;
 // The employee whose dialog (crew changes, absences) is open (null: closed)
 let employeeModalId = null;
+// Times of the shift types (PLR_SM) from the server; these defaults are used until the first answer
+let shiftTimes = [
+  {type: "DAY", start: "08:00", end: "20:00"},
+  {type: "NIGHT", start: "20:00", end: "08:00"}
+];
 
 $(document).ready(function () {
   $("#newMonthButton").click(function () {
@@ -171,6 +176,7 @@ function refreshCrews() {
 function refreshPeople() {
   return $.getJSON("/crew-schedules", function (schedule) {
     lastSchedule = schedule;
+    setShiftTimes(schedule.shifts);
     renderEmployees(schedule);
     renderShiftPeopleDialog();
     renderEmployeeDialog();
@@ -204,6 +210,7 @@ function newEmptyMonth() {
 
 // Gantt chart of the crew schedule: one row per line, one bar per shift with the crew that works it
 function renderRoster(roster) {
+  setShiftTimes(roster.shifts);
   $("#version").text(`Session: ${roster.sessionId}, version: ${roster.versionId}`);
   $("#monthInput").val(roster.month);
   byLineGroupDataSet.clear();
@@ -246,7 +253,7 @@ function addCrewShiftItem(crewShift) {
     .addClass(crewShift.pinned ? "fa-lock" : "fa-lock-open")
     .attr("title", crewShift.pinned ? "Pinned. Click to unpin." : "Click to pin.");
   // People of this shift / people needed; "(-1, +1)" when it differs from the crew (absent or on an absence,
-  // substitutes); "*" when the number of people needed was changed for this shift
+  // substitutes)
   const changes = [];
   const missing = crewShift.absentEmployeeIds.length + crewShift.unavailableEmployeeIds.length;
   if (missing > 0) {
@@ -282,25 +289,56 @@ function setWindow(roster) {
   byEmployeeTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
 }
 
-// Shifts start at 08:00 and 20:00: a dragged shift snaps to the nearest start
-function snapToShiftStart(date) {
-  const time = new Date(date);
-  const starts = [-4, 8, 20, 32].map(hours => new Date(time.getFullYear(), time.getMonth(), time.getDate(), hours));
-  return starts.reduce((best, start) => Math.abs(start - time) < Math.abs(best - time) ? start : best);
+function setShiftTimes(shifts) {
+  if (shifts != null && shifts.length > 0) {
+    shiftTimes = shifts;
+  }
 }
 
-// The line shift at a time: 08:00-20:00 is the day shift, 20:00-08:00 the night shift of the day it starts
+// "08:30" or "08:30:00" -> minutes after midnight
+function minutesOf(time) {
+  return parseInt(time.substring(0, 2)) * 60 + parseInt(time.substring(3, 5));
+}
+
+// Start and end (Date) of every shift that starts on the day before, on the day of, or on the day after the time.
+// A shift whose end is not after its start ends on the next day (night shift).
+function shiftsAround(time) {
+  const date = new Date(time);
+  const result = [];
+  for (const dayOffset of [-1, 0, 1]) {
+    const day = new Date(date.getFullYear(), date.getMonth(), date.getDate() + dayOffset);
+    for (const shift of shiftTimes) {
+      const startMinutes = minutesOf(shift.start);
+      let endMinutes = minutesOf(shift.end);
+      if (endMinutes <= startMinutes) {
+        endMinutes += 24 * 60;
+      }
+      result.push({
+        type: shift.type,
+        day: JSJoda.LocalDate.of(day.getFullYear(), day.getMonth() + 1, day.getDate()),
+        start: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, startMinutes),
+        end: new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, endMinutes)
+      });
+    }
+  }
+  return result;
+}
+
+// A dragged shift snaps to the nearest shift start (times from PLR_SM)
+function snapToShiftStart(date) {
+  const time = new Date(date);
+  return shiftsAround(time).map(shift => shift.start)
+    .reduce((best, start) => Math.abs(start - time) < Math.abs(best - time) ? start : best);
+}
+
+// The line shift at a time: the shift whose start..end contains it (the night shift belongs to the day it
+// starts); between two shifts: the one with the nearest start
 function slotOf(time) {
   const date = new Date(time);
-  let day = JSJoda.LocalDate.of(date.getFullYear(), date.getMonth() + 1, date.getDate());
-  const hour = date.getHours();
-  if (hour >= 8 && hour < 20) {
-    return {date: day.toString(), type: "DAY"};
-  }
-  if (hour < 8) {
-    day = day.minusDays(1);
-  }
-  return {date: day.toString(), type: "NIGHT"};
+  const shifts = shiftsAround(date);
+  const shift = shifts.find(s => s.start <= date && date < s.end)
+    || shifts.reduce((best, s) => Math.abs(s.start - date) < Math.abs(best.start - date) ? s : best);
+  return {date: shift.day.toString(), type: shift.type};
 }
 
 // Double-click on an empty place: add a crew; on a crew shift: give it another crew
@@ -330,9 +368,8 @@ function openCrewPicker(slot) {
   }
   pickerSlot = slot;
   const line = linesById.get(slot.lineId);
-  const shiftName = slot.type === "DAY" ? "day shift (08:00-20:00)" : "night shift (20:00-08:00)";
   $("#crewShiftModalTitle").text(slot.crewShiftId == null ? "Add a crew" : "Change the crew");
-  $("#crewShiftModalSlot").text(`${line == null ? slot.lineId : line.name}, ${slot.date}, ${shiftName}`);
+  $("#crewShiftModalSlot").text(`${line == null ? slot.lineId : line.name}, ${slot.date}, ${shiftName(slot.type)}`);
 
   // Crews that already work at the same time on another line cannot be chosen
   const busy = new Map();
@@ -512,7 +549,15 @@ function changeShiftPeople(request) {
     });
 }
 
-// Gantt chart by employee: employees grouped by their crew (sorted by number), sorted by name within the crew.
+// Order of the employees of a crew, like the server: by position (PLR_TB.POS; none: last), then by name
+function byPositionAndName(a, b) {
+  const positionA = a.position == null ? Number.MAX_SAFE_INTEGER : a.position;
+  const positionB = b.position == null ? Number.MAX_SAFE_INTEGER : b.position;
+  return positionA - positionB || a.fullName.localeCompare(b.fullName) || a.id - b.id;
+}
+
+// Gantt chart by employee: employees grouped by their crew (sorted by number), sorted by position and name within
+// the crew.
 // A bar is a crew shift the employee works: with their own crew, or as a substitute in another crew (dashed).
 // A grey bar is a shift of their crew they do not work (absent). The label has the shifts and
 // hours of the month. Double-click a bar to take the employee off the shift or replace them, or an empty place
@@ -532,7 +577,7 @@ function renderEmployees(schedule) {
   const shiftCount = new Map();
   const hourCount = new Map();
   $.each(schedule.crewShifts, (index, crewShift) => {
-    const hours = (new Date(crewShift.end) - new Date(crewShift.start)) / (1000 * 60 * 60);
+    const hours = crewShift.hours;
     crewShift.employeeIds.forEach(id => {
       shiftCount.set(id, (shiftCount.get(id) || 0) + 1);
       hourCount.set(id, (hourCount.get(id) || 0) + hours);
@@ -543,7 +588,7 @@ function renderEmployees(schedule) {
   [...employeesByCrew.values()]
     .sort((a, b) => a.crew.id - b.crew.id)
     .forEach(({crew, employees}) => {
-      employees.sort((a, b) => a.fullName.localeCompare(b.fullName) || a.id - b.id);
+      employees.sort(byPositionAndName);
       byEmployeeGroupDataSet.add({
         id: `crew-${crew.id}`, order: order++, showNested: true,
         nestedGroups: employees.map(employee => employee.id),
@@ -839,8 +884,11 @@ function describeShift(crewShift) {
   return `${crewShift.date}, ${shiftName(crewShift.type)}, ${crewShift.line.name}, crew ${crewName(crewShift.crew)}`;
 }
 
+// "day shift (08:00-20:00)", with the times from PLR_SM
 function shiftName(type) {
-  return type === "DAY" ? "day shift (08:00-20:00)" : "night shift (20:00-08:00)";
+  const shift = shiftTimes.find(s => s.type === type);
+  const times = shift == null ? "" : ` (${shift.start.substring(0, 5)}-${shift.end.substring(0, 5)})`;
+  return (type === "DAY" ? "day shift" : "night shift") + times;
 }
 
 // Crew list: one accordion item per crew; the body has all employees of the crew.

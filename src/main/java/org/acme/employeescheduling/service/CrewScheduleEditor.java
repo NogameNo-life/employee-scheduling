@@ -279,7 +279,7 @@ public class CrewScheduleEditor {
             }
         }
         // One crew per line shift, so date, shift and line are enough for a unique id
-        return new CrewShift(date + "-" + type + "-" + line.getId(), date, type, line, crew);
+        return new CrewShift(date + "-" + type + "-" + line.getId(), date, schedule.getShift(type), line, crew);
     }
 
     private static void requireInMonth(CrewSchedule schedule, LocalDate date) {
