@@ -11,7 +11,8 @@
 - Java 21, Spring Boot 3.5 (Spring MVC, Spring Data JPA, Hibernate 6.6), Lombok, springdoc (Swagger UI).
 - Spring Boot 4 пока не используется: он требует Hibernate 7 и Jackson 3, а TABU2 работает на SQL Server 2012.
 - MS SQL Server, схема `dbo`, два источника данных (см. ниже).
-- Фронтенд: `src/main/resources/static/index.html` + `app.js` (jQuery, Bootstrap, js-joda, vis-timeline).
+- Фронтенд: `src/main/resources/static/index.html` + `app.js` + `style.css` (jQuery, Bootstrap, js-joda, Font Awesome —
+  все из webjars, без CDN: в сети завода может не быть интернета).
 - Сборка: Maven; Docker: `Dockerfile` (multi-stage, fat jar) и `docker-compose.yaml`.
 
 ## Запуск
@@ -253,31 +254,33 @@ D[(i + s − 1) mod 4]. Сдвиг s: из `startCrewId`, иначе из пос
 
 Ошибки: `ScheduleException` → JSON `ErrorInfo` (`sessionId`, `message`) с кодом 400 / 404 / 409.
 
-## Фронтенд (`static/app.js`)
+## Фронтенд (`static/app.js`, `style.css`)
 
-- Две диаграммы vis-timeline:
-  - **«By line»** (`byLineTimeline`): строки — линии, элементы — смены бригад (`GET /crew-schedules/rotation`).
-    Двойной щелчок по пустому месту — добавить (окно `crewShiftModal`), двойной щелчок по смене — поменять бригаду,
-    перетаскивание — перенести (`snapToShiftStart`, привязка к началу ближайшей смены), × — удалить,
-    замок — закрепить. Щелчок по названию бригады или по числу людей открывает окно людей смены
-    (`shiftPeopleModal`, `openShiftPeopleDialog` / `renderShiftPeopleDialog`). Смены из `warnings` — класс
-    `rest-warning` (оранжевая рамка) и подсказка `title` (сообщения экранируются: подсказка — HTML).
-- Кнопка «Generate» (`generateModal`, `openGenerateDialog`, `generate`) и окно нового месяца (`newMonthModal`,
-  флажок `generate=true`); результат генерации — `showGeneration`, счётчик предупреждений — `renderWarnings`.
-  - **«By employee»** (`byEmployeeTimeline`): сотрудники по бригадам (по позиции, затем по ФИО —
-    `byPositionAndName`), данные из `GET /crew-schedules`; часы за месяц — сумма `hours` смен.
-    Двойной щелчок — окно `shiftEmployeeModal` (снять, заменить, вернуть, добавить). Отсутствия — фоновые
-    элементы (`type: "background"`, класс `absence`). Щелчок по ФИО (`props.what === "group-label"`) — окно
-    сотрудника.
-- Окно сотрудника (`employeeModal`, `openEmployeeDialog` / `renderEmployeeDialog`): переводы с даты и отсутствия.
-  `crewOn` и `absenceOn` повторяют `Employee.getCrewOn` / `getAbsenceOn` на клиенте (даты ISO сравниваются как строки).
-- Список бригад (`renderCrews`) из `GET /crew-schedules/crews`; смена бригады сотрудника — `moveEmployee`.
-- После каждого изменения `onRosterChanged` перерисовывает график по линиям и заново загружает
-  `GET /crew-schedules` и `GET /crew-schedules/crews`. Открытое окно людей смены перерисовывается после загрузки.
-- Время смен приходит с сервера (`shifts` в `RotationResponse` и в `GET /crew-schedules`, `setShiftTimes`);
-  до первого ответа — 08:00–20:00 и 20:00–08:00. `slotOf` определяет смену по месту щелчка (смена, в интервал
-  которой попадает время; ночная относится к дню начала), `shiftName` — подпись смены с её временем.
-- Текст вставляется через jQuery (`.text()`), поэтому в vis-timeline отключена встроенная XSS-фильтрация.
+- Дизайн — по макетам Google Stitch (DESIGN.md): цвета, скругления, отступы и оттенки смен — CSS-переменные в
+  `style.css`; системный шрифт, иконки Font Awesome. Никаких CDN и веб-шрифтов. Весь текст на русском.
+- Данные: каждое изменение отвечает `RotationResponse` (`warnings`, `shifts`, `generation`), затем загружается вся
+  версия `GET /crew-schedules`, и страница рисуется заново (`onRosterChanged` → `renderAll`). `buildIndex` строит
+  словари: смены по ячейке линии (`slotKey`), по дате, предупреждения по смене и по сотруднику, дни сотрудника.
+- Шапка: месяц (стрелки открывают окно нового месяца → `POST /init`), вид «По линиям» / «По сотрудникам»
+  (запоминается в `sessionStorage`), «Новый пустой месяц», «Авто-заполнение» (`generateModal`), «Сохранить»
+  неактивна. Плашки: нарушения отдыха и смены с дефицитом (`employeeIds` < `staffCount`); щелчок —
+  `scrollToFirst`. Внизу — итоги (`renderStats`).
+- **«По линиям»** (`linesGridHtml`): таблица, столбец линий и шапка дней закреплены (`position: sticky`), сегодня
+  подсвечено, в шапке дня — люди / нужно. В ячейке две карточки (`shiftCardHtml`): дефицит — розовая, нарушение —
+  оранжевая рамка и подсказка `title`, закреплена — замок, пустая — пунктир (окно `crewShiftModal`, бригады линии
+  первыми — `fillCrewSelect`). Перетаскивание HTML5 (`dropAction`): на карточку той же линии и типа — обмен
+  (`swapCrews`, два `PUT`; если второй не прошёл — перезагрузка и ошибка), на пустую — перенос (`moveCrewShift`).
+- **«По сотрудникам»** (`employeesGridHtml`): строки по бригадам на начало месяца, внутри — по позиции и ФИО.
+  Клетка (`employeeCell`): Д / Н (пунктир — замена, зачёркнуто — снят со смены), Б / ОТ / У / ПР, иначе О после
+  ночной смены, иначе В; оранжевая точка — нарушение отдыха сотрудника (своё или бригады в смене, где он член
+  бригады). Щелчок по клетке — `shiftEmployeeModal` (снять, заменить, вернуть, добавить).
+- Панель справа (`#drawer`, 420px, рядом с графиком): смена (`renderShiftDrawer`: бригада, закрепить, удалить, люди
+  смены) или сотрудник (`renderEmployeeDrawer`: смены и часы, нарушения, перевод, отсутствия). Перерисовывается после
+  каждого изменения; если смены больше нет — закрывается.
+- `crewOn` и `absenceOn` повторяют `Employee.getCrewOn` / `getAbsenceOn` на клиенте (даты ISO сравниваются как строки).
+- Сетки — HTML-строки (до ~6000 клеток), весь текст через `escapeHtml`; события — делегированные на `#gridScroll`.
+- Демо без баз данных: `mvn spring-boot:test-run` запускает `TestDemoApplication` из тестов (6 линий, 24 бригады,
+  выдуманные ФИО, у бригады Линия4/2 на одного человека меньше), затем http://localhost:8080.
 
 ## Тесты
 
