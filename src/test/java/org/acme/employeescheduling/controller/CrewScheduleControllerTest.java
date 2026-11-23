@@ -118,17 +118,41 @@ class CrewScheduleControllerTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"L9\"}"))
                 .andExpect(status().isNotFound());
+    }
 
-        // Earlier crew shifts that do not fit one rotation
-        mvc.perform(json(post("/crew-schedules/crew-shifts"),
-                "{\"date\": \"2026-11-01\", \"type\": \"DAY\", \"lineId\": \"" + KC + "\", \"crewId\": 1}"))
-                .andExpect(status().isOk());
-        mvc.perform(json(post("/crew-schedules/crew-shifts"),
-                "{\"date\": \"2026-11-01\", \"type\": \"NIGHT\", \"lineId\": \"" + KC + "\", \"crewId\": 4}"))
-                .andExpect(status().isOk());
-        mvc.perform(json(post("/crew-schedules/generate"), "{\"from\": \"2026-11-03\"}"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value(containsString("Выберите бригаду")));
+    @Test
+    void previewSampleAndBulkPin() throws Exception {
+        String url = "/crew-schedules/lines/" + URLEncoder.encode(KC, StandardCharsets.UTF_8) + "/sample";
+        mvc.perform(json(put(URI.create(url)), "{\"from\": \"2026-11-01\", \"dayCrewIds\": [5, 4, 3, 1]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[1].days[0].dayShift.crew.id").value(5))
+                .andExpect(jsonPath("$.lines[1].days[0].dayShift.pinned").value(true))
+                .andExpect(jsonPath("$.generation").doesNotExist());
+        mvc.perform(json(put(URI.create(url)), "{\"dayCrewIds\": [5, 5, 3, 1]}"))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(get("/crew-schedules/generate/preview").param("lineId", KC).param("from", "2026-11-01"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total.pinned").value(4))
+                .andExpect(jsonPath("$.total.unpinned").value(0))
+                .andExpect(jsonPath("$.total.empty").value(56))
+                .andExpect(jsonPath("$.lines[0].lineId").value(KC));
+
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"" + KC + "\", \"pin\": true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.generation.created").value(56))
+                .andExpect(jsonPath("$.lines[1].days[4].dayShift.crew.id").value(5))
+                .andExpect(jsonPath("$.lines[1].days[4].dayShift.pinned").value(true));
+
+        mvc.perform(json(post("/crew-schedules/crew-shifts/pinned"),
+                "{\"lineId\": \"" + KC + "\", \"from\": \"2026-11-05\", \"pinned\": false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines[1].days[3].dayShift.pinned").value(true))
+                .andExpect(jsonPath("$.lines[1].days[4].dayShift.pinned").value(false))
+                .andExpect(jsonPath("$.lines[1].days[29].nightShift.pinned").value(false));
+        mvc.perform(json(post("/crew-schedules/crew-shifts/pinned"),
+                "{\"from\": \"2026-12-01\", \"pinned\": true}"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

@@ -355,11 +355,11 @@ body {
 .shift-card .time { color: var(--c-text-muted); margin-left: 4px; }
 .shift-card .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 3px; color: var(--c-text-muted); }
 .shift-card .people { font-weight: 600; color: var(--c-text); }
-.shift-card .pin { position: absolute; top: 6px; right: 7px; color: var(--c-secondary); font-size: 10px; }
+.shift-card .pin { position: absolute; top: 5px; right: 6px; color: var(--c-primary); font-size: 11px; }
 .shift-card.deficit { background: var(--deficit-bg); border-color: #fda4af; }
 .shift-card.deficit .people { color: var(--deficit-text); }
 .shift-card.rest-warning { border: 1.5px solid var(--warning); box-shadow: 0 0 0 1px var(--warning-bg); }
-.shift-card.pinned { border-width: 1.5px; border-color: var(--c-primary); }
+.shift-card.pinned { border-width: 2px; border-color: var(--c-primary); }
 .shift-card.pinned.rest-warning { border-color: var(--warning); }
 .shift-card.selected { outline: 2px solid var(--c-primary); outline-offset: 1px; }
 
@@ -551,6 +551,13 @@ body {
 #notificationPanel { position: fixed; top: var(--space-lg); right: var(--space-lg); z-index: 1100; width: 420px; max-width: calc(100vw - 2rem); }
 #notificationPanel .toast { width: 100%; margin-bottom: var(--space-sm); }
 .generation-messages { max-height: 15rem; overflow-y: auto; }
+
+.generate-lines li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.generate-lines .sample-link { margin-left: auto; }
+.queue-badge { font-size: 11px; padding: 1px 7px; border-radius: var(--r-full); background: var(--c-border-input); color: var(--c-text); }
+.queue-badge.own { background: var(--c-primary); color: #fff; }
+.sample-day { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.sample-day > span { flex: 0 0 120px; font-size: 13px; }
 
 @media (max-width: 1100px) {
   .workspace { flex-direction: column; }

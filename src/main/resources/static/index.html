@@ -120,8 +120,8 @@
       </div>
       <div class="modal-body">
         <p class="text-muted small">
-          Линии с 4 бригадами заполняются по циклу День → Ночь → Отсыпной → Выходной до конца месяца.
-          Закреплённые смены не меняются.
+          Цикл День → Ночь → Отсыпной → Выходной до конца месяца. Линия со своей очередью или закреплёнными сменами
+          продолжает их, остальные идут по умолчанию. Закреплённые смены не меняются.
         </p>
         <label for="generateLine" class="form-label">Линия</label>
         <select id="generateLine" class="form-select mb-2"></select>
@@ -129,16 +129,84 @@
         <input id="generateFrom" type="date" class="form-control mb-2">
         <label for="generateStartCrew" class="form-label">Бригада в дневную смену первого дня</label>
         <select id="generateStartCrew" class="form-select mb-2"></select>
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" id="generateOverwrite">
-          <label class="form-check-label" for="generateOverwrite">
-            Перезаписать: сначала удалить смены линии с этой даты (кроме закреплённых)
-          </label>
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" id="generatePin" checked>
+          <label class="form-check-label" for="generatePin">Закрепить сгенерированные смены</label>
         </div>
+        <h6 class="mb-1">Очередь бригад по линиям</h6>
+        <ul class="plain-list generate-lines" id="generateLineList"></ul>
+        <hr>
+        <h6 class="mb-2">Закрепление за период</h6>
+        <div class="row g-2 align-items-end">
+          <div class="col">
+            <label for="bulkPinFrom" class="form-label small mb-0">с</label>
+            <input id="bulkPinFrom" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col">
+            <label for="bulkPinTo" class="form-label small mb-0">по</label>
+            <input id="bulkPinTo" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-sm btn-outline-dark" id="bulkPinButton">
+              <span class="fas fa-lock me-1"></span>Закрепить всё
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-dark" id="bulkUnpinButton">
+              <span class="fas fa-lock-open me-1"></span>Открепить всё
+            </button>
+          </div>
+        </div>
+        <p class="text-muted small mt-1 mb-0">Для линии, выбранной выше (или всех линий).</p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
         <button type="button" class="btn btn-dark" id="generateModalSave">Заполнить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Partly filled period: what to do with the unpinned crew shifts -->
+<div class="modal fade" id="overwriteModal" tabindex="-1" aria-labelledby="overwriteModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="overwriteModalTitle">Период уже заполнен частично</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <p id="overwriteModalText" class="mb-1"></p>
+        <p id="overwriteModalPinned" class="text-muted small mb-0"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-outline-dark" id="overwriteModalFill">Только дополнить пустые</button>
+        <button type="button" class="btn btn-danger" id="overwriteModalReplace">Перезаписать незакреплённые</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Sample of one line: DAY crews of 4 days in a row -->
+<div class="modal fade" id="sampleModal" tabindex="-1" aria-labelledby="sampleModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="sampleModalTitle">Очередь бригад</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">
+          Дневные бригады 4 дней подряд, минимум 3 разные. Ночные смены следуют из цепочки: ночью работает дневная
+          бригада предыдущего дня. Дневные смены очереди будут закреплены.
+        </p>
+        <label for="sampleFrom" class="form-label">Первый день</label>
+        <input id="sampleFrom" type="date" class="form-control mb-2">
+        <div id="sampleDays"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-outline-dark" id="sampleSave">Поставить очередь</button>
+        <button type="button" class="btn btn-dark" id="sampleSaveFill">Поставить и заполнить линию</button>
       </div>
     </div>
   </div>

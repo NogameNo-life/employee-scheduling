@@ -35,6 +35,10 @@ let shiftTimes = [
   {type: "DAY", start: "08:00", end: "20:00", hours: 12},
   {type: "NIGHT", start: "20:00", end: "08:00", hours: 12}
 ];
+// The generation waiting for the answer of the overwrite dialog: {lineId, from, startCrewId, pin}
+let pendingGeneration = null;
+// The line of the open sample dialog
+let sampleLineId = null;
 // Lookups, built again for every version (buildIndex)
 let index = emptyIndex();
 
@@ -45,7 +49,15 @@ $(document).ready(function () {
   $("#newMonthModalSave").click(startNewMonth);
   $("#generateButton").click(openGenerateDialog);
   $("#generateLine").on("change", renderGenerateStartCrews);
-  $("#generateModalSave").click(generate);
+  $("#generateModalSave").click(startGeneration);
+  $("#overwriteModalReplace").click(() => answerOverwrite(true));
+  $("#overwriteModalFill").click(() => answerOverwrite(false));
+  $("#bulkPinButton").click(() => bulkPin(true));
+  $("#bulkUnpinButton").click(() => bulkPin(false));
+  $("#generateLineList").on("click", ".sample-link", event => openSampleDialog(String($(event.currentTarget).data("line"))));
+  $("#sampleFrom").on("change", renderSampleDays);
+  $("#sampleSave").click(() => saveSample(false));
+  $("#sampleSaveFill").click(() => saveSample(true));
   $("#refreshButton").click(refreshSchedule);
   $("#viewLinesButton").click(() => setView("lines"));
   $("#viewEmployeesButton").click(() => setView("employees"));
@@ -885,7 +897,7 @@ function startNewMonth() {
   }).fail(xhr => showError("Не удалось создать график месяца.", xhr));
 }
 
-// Generator: line (all or one), from date, start crew (auto or one of the line's crews), overwrite
+// Generator: line (all or one), from date, start crew, pin, the sample of each line, pin / unpin of a period
 function openGenerateDialog() {
   if (lastSchedule == null) {
     showSimpleError("Графика ещё нет. Сначала создайте месяц.");
@@ -894,18 +906,36 @@ function openGenerateDialog() {
   const lineSelect = $("#generateLine").empty().append($(`<option value=""/>`).text("Все линии"));
   index.lines.forEach(line => lineSelect.append($(`<option/>`).val(line.id).text(line.name)));
   const month = JSJoda.YearMonth.parse(shownMonth);
-  $("#generateFrom").val(month.atDay(1).toString())
-    .attr({min: month.atDay(1).toString(), max: month.atEndOfMonth().toString()});
-  $("#generateOverwrite").prop("checked", false);
+  const range = {min: month.atDay(1).toString(), max: month.atEndOfMonth().toString()};
+  $("#generateFrom").val(range.min).attr(range);
+  $("#bulkPinFrom").val(range.min).attr(range);
+  $("#bulkPinTo").val(range.max).attr(range);
+  $("#generatePin").prop("checked", true);
   renderGenerateStartCrews();
-  bootstrap.Modal.getOrCreateInstance(document.getElementById("generateModal")).show();
+  renderGenerateLines();
+  modal("generateModal").show();
+}
+
+function modal(id) {
+  return bootstrap.Modal.getOrCreateInstance(document.getElementById(id));
+}
+
+// Every line with the source of its order: pinned shifts ("своя очередь") or the default
+function renderGenerateLines() {
+  const pinnedLines = new Set(lastSchedule.crewShifts.filter(shift => shift.pinned).map(shift => shift.line.id));
+  $("#generateLineList").empty().append(index.lines.map(line => $(`<li/>`)
+    .append($(`<span/>`).text(line.name + " "))
+    .append($(`<span class="queue-badge"/>`).toggleClass("own", pinnedLines.has(line.id))
+      .text(pinnedLines.has(line.id) ? "своя очередь" : "по умолчанию"))
+    .append($(`<button type="button" class="btn btn-link btn-sm p-0 sample-link"/>`).attr("data-line", line.id)
+      .text("Задать очередь бригад"))));
 }
 
 // A start crew can only be chosen for one line, from the crews of that line (Crew.lineId)
 function renderGenerateStartCrews() {
   const lineId = $("#generateLine").val();
   const select = $("#generateStartCrew").empty()
-    .append($(`<option value=""/>`).text("Авто (продолжить смены до этой даты)"));
+    .append($(`<option value=""/>`).text("Авто (по очереди линии)"));
   if (lineId) {
     lastSchedule.crews.filter(crew => crew.lineId === lineId).sort((a, b) => a.id - b.id)
       .forEach(crew => select.append($(`<option/>`).val(crew.id).text(crewName(crew))));
@@ -913,22 +943,142 @@ function renderGenerateStartCrews() {
   select.prop("disabled", !lineId);
 }
 
-function generate() {
-  const overwrite = $("#generateOverwrite").is(":checked");
-  if (overwrite && !confirm("Удалить незакреплённые смены с этой даты и заполнить их заново?")) {
-    return;
-  }
+function startGeneration() {
   const startCrewId = $("#generateStartCrew").val();
-  const body = {
+  runGeneration({
     lineId: $("#generateLine").val() || null,
     from: $("#generateFrom").val() || null,
     startCrewId: startCrewId ? parseInt(startCrewId) : null,
-    overwrite: overwrite
-  };
-  send("POST", "/crew-schedules/generate", body).done(roster => {
-    bootstrap.Modal.getOrCreateInstance(document.getElementById("generateModal")).hide();
+    pin: $("#generatePin").is(":checked")
+  });
+}
+
+// Preview first: nothing to do / generate without asking / ask what to do with the unpinned crew shifts
+function runGeneration(request) {
+  const params = new URLSearchParams();
+  if (request.lineId) {
+    params.set("lineId", request.lineId);
+  }
+  if (request.from) {
+    params.set("from", request.from);
+  }
+  $.getJSON(`/crew-schedules/generate/preview?${params}`, preview => {
+    const total = preview.total;
+    if (total.empty === 0 && total.unpinned === 0) {
+      modal("generateModal").hide();
+      showInfo("Месяц уже заполнен", "В выбранном периоде нет пустых и незакреплённых смен.");
+    } else if (total.unpinned === 0) {
+      sendGeneration(request, false);
+    } else {
+      pendingGeneration = request;
+      $("#overwriteModalText").text(`В выбранном периоде ${total.unpinned} ${plural(total.unpinned, "незакреплённая смена",
+        "незакреплённые смены", "незакреплённых смен")}. Что сделать?`);
+      $("#overwriteModalPinned").text(`Закреплённые ${total.pinned} ${plural(total.pinned, "смена", "смены", "смен")} `
+        + `${total.pinned === 1 ? "останется" : "останутся"}. Пустых мест: ${total.empty}.`);
+      $("#overwriteModalFill").prop("disabled", total.empty === 0);
+      modal("generateModal").hide();
+      modal("overwriteModal").show();
+    }
+  }).fail(xhr => showError("Не удалось проверить период.", xhr));
+}
+
+function answerOverwrite(overwrite) {
+  const request = pendingGeneration;
+  pendingGeneration = null;
+  modal("overwriteModal").hide();
+  if (request != null) {
+    sendGeneration(request, overwrite);
+  }
+}
+
+function sendGeneration(request, overwrite) {
+  send("POST", "/crew-schedules/generate", {...request, overwrite: overwrite}).done(roster => {
+    modal("generateModal").hide();
     onRosterChanged(roster);
   }).fail(xhr => showError("Не удалось заполнить график.", xhr));
+}
+
+// "Закрепить всё" / "Открепить всё" for the line chosen in the dialog (or all lines) and a date range
+function bulkPin(pinned) {
+  const lineId = $("#generateLine").val() || null;
+  const from = $("#bulkPinFrom").val();
+  const to = $("#bulkPinTo").val();
+  if (!from || !to || to < from) {
+    showSimpleError("Укажите период: первый и последний день.");
+    return;
+  }
+  const inRange = lastSchedule.crewShifts.filter(shift => (lineId == null || shift.line.id === lineId)
+    && shift.date >= from && shift.date <= to).length;
+  const where = lineId == null ? "всех линий" : `линии ${index.linesById.get(lineId).name}`;
+  if (!confirm(`${pinned ? "Закрепить" : "Открепить"} ${inRange} ${plural(inRange, "смену", "смены", "смен")} ${where} `
+    + `с ${formatDate(from)} по ${formatDate(to)}?`)) {
+    return;
+  }
+  send("POST", "/crew-schedules/crew-shifts/pinned", {lineId: lineId, from: from, to: to, pinned: pinned})
+    .done(roster => onRosterChanged(roster).done(() => renderGenerateLines()))
+    .fail(xhr => showError("Не удалось изменить закрепление.", xhr));
+}
+
+// ----- Sample ("Очередь бригад"): DAY crews of 4 days in a row, any crews, the line's own crews first -----
+
+function openSampleDialog(lineId) {
+  sampleLineId = lineId;
+  const line = index.linesById.get(lineId);
+  const month = JSJoda.YearMonth.parse(shownMonth);
+  $("#sampleModalTitle").text(`Очередь бригад: ${line == null ? lineId : line.name}`);
+  $("#sampleFrom").val(month.atDay(1).toString())
+    .attr({min: month.atDay(1).toString(), max: month.atEndOfMonth().minusDays(3).toString()});
+  renderSampleDays();
+  modal("generateModal").hide();
+  modal("sampleModal").show();
+}
+
+function renderSampleDays() {
+  const from = $("#sampleFrom").val();
+  const box = $("#sampleDays").empty();
+  if (!from) {
+    return;
+  }
+  const crews = [...lastSchedule.crews].sort((a, b) => a.id - b.id);
+  const options = list => list.map(crew => $(`<option/>`).val(crew.id).text(crewName(crew)));
+  const own = crews.filter(crew => crew.lineId === sampleLineId);
+  const others = crews.filter(crew => crew.lineId !== sampleLineId);
+  for (let day = 0; day < 4; day++) {
+    const date = JSJoda.LocalDate.parse(from).plusDays(day).toString();
+    const current = index.shiftsBySlot.get(slotKey(sampleLineId, date, "DAY"));
+    const select = $(`<select class="form-select form-select-sm sample-crew"/>`)
+      .attr("aria-label", `Дневная бригада ${formatDate(date)}`)
+      .append($(`<option value=""/>`).text("— не задана —"))
+      .append($(`<optgroup label="Бригады линии"/>`).append(options(own)))
+      .append($(`<optgroup label="Другие линии"/>`).append(options(others)))
+      .val(current != null ? current.crew.id : (own[[0, 2, 3, 1][day]]?.id ?? ""));
+    box.append($(`<div class="sample-day"/>`)
+      .append($(`<span/>`).text(`${formatDate(date)}, ${weekday(date)}`)).append(select));
+  }
+}
+
+function saveSample(fill) {
+  const from = $("#sampleFrom").val();
+  const lineId = sampleLineId;
+  const dayCrewIds = $("#sampleDays .sample-crew").toArray().map(el => el.value ? parseInt(el.value) : null);
+  const chosen = dayCrewIds.filter(id => id != null);
+  if (!from || chosen.length < 3 || new Set(chosen).size !== chosen.length) {
+    showSimpleError("Выберите минимум 3 разные бригады.");
+    return;
+  }
+  send("PUT", `/crew-schedules/lines/${encodeURIComponent(lineId)}/sample`, {from: from, dayCrewIds: dayCrewIds})
+    .done(roster => {
+      modal("sampleModal").hide();
+      onRosterChanged(roster).done(() => {
+        if (fill) {
+          runGeneration({lineId: lineId, from: from, startCrewId: null, pin: true});
+        } else {
+          modal("generateModal").show();
+          renderGenerateLines();
+        }
+      });
+    })
+    .fail(xhr => showError("Не удалось поставить очередь.", xhr));
 }
 
 // What the generator did: created and kept shifts, messages (skipped lines, shifts left empty)
@@ -1215,6 +1365,16 @@ function getSessionId() {
 }
 
 // ---------- Notifications (Bootstrap toasts) ----------
+
+function showInfo(title, text) {
+  const toast = $(`<div class="toast" role="status" aria-live="polite" aria-atomic="true" data-bs-delay="8000"/>`)
+    .append($(`<div class="toast-header"/>`)
+      .append($(`<span class="fas fa-info-circle me-2"/>`))
+      .append($(`<strong class="me-auto"/>`).text(title))
+      .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Закрыть"/>`)))
+    .append($(`<div class="toast-body"/>`).text(text));
+  showToast(toast);
+}
 
 function showSimpleError(title) {
   showNotification(title, null);

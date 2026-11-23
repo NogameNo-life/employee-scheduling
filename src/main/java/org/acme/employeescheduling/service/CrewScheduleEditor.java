@@ -2,8 +2,11 @@ package org.acme.employeescheduling.service;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Predicate;
@@ -34,6 +37,9 @@ import org.acme.employeescheduling.domain.ShiftType;
  */
 @Service
 public class CrewScheduleEditor {
+
+    /** Days of a line sample ("Очередь бригад"). */
+    static final int SAMPLE_DAYS = 4;
 
     /** Puts a crew on a line for one shift. Every line shift has at most one crew. */
     public CrewShift addCrewShift(CrewSchedule schedule, CrewShiftRequest request) {
@@ -70,6 +76,82 @@ public class CrewScheduleEditor {
         CrewShift crewShift = findCrewShift(schedule, crewShiftId);
         crewShift.setPinned(pinned);
         return crewShift;
+    }
+
+    /**
+     * Pins or unpins every crew shift of a line (null: all lines) from {@code from} to {@code to}, both included.
+     * Null dates: the first / last day of the month.
+     *
+     * @return how many crew shifts are in the range
+     */
+    public int setPinnedInRange(CrewSchedule schedule, String lineId, LocalDate from, LocalDate to, boolean pinned) {
+        LocalDate first = from == null ? schedule.getMonth().atDay(1) : from;
+        LocalDate last = to == null ? schedule.getMonth().atEndOfMonth() : to;
+        requireInMonth(schedule, first);
+        requireInMonth(schedule, last);
+        if (last.isBefore(first)) {
+            throw new IllegalArgumentException("Дата начала " + first + " позже даты конца " + last + ".");
+        }
+        String line = lineId == null || lineId.isBlank() ? null : findLine(schedule, lineId).getId();
+        int count = 0;
+        for (CrewShift shift : schedule.getCrewShifts()) {
+            if ((line == null || shift.getLine().getId().equals(line)) && !shift.getDate().isBefore(first)
+                    && !shift.getDate().isAfter(last)) {
+                shift.setPinned(pinned);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Sets the sample of a line: the DAY crews of 4 days in a row. Removes the unpinned crew shifts of the line in
+     * those days and adds the DAY shifts pinned; it does not generate. Any crews of the version, at least 3, all
+     * different. If anything does not fit, nothing changes.
+     */
+    public void setLineSample(CrewSchedule schedule, String lineId, SampleRequest request) {
+        Line line = findLine(schedule, lineId);
+        if (request == null || request.dayCrewIds() == null || request.dayCrewIds().size() != SAMPLE_DAYS) {
+            throw new IllegalArgumentException("В очереди должно быть " + SAMPLE_DAYS + " дня.");
+        }
+        List<Integer> crewIds = request.dayCrewIds();
+        List<Integer> chosen = crewIds.stream().filter(Objects::nonNull).toList();
+        if (chosen.size() < SAMPLE_DAYS - 1 || new HashSet<>(chosen).size() != chosen.size()) {
+            throw new IllegalArgumentException("В очереди должно быть минимум 3 разные бригады.");
+        }
+        chosen.forEach(crewId -> findCrew(schedule, crewId));
+        LocalDate from = request.from() == null ? schedule.getMonth().atDay(1) : request.from();
+        LocalDate last = from.plusDays(SAMPLE_DAYS - 1L);
+        requireInMonth(schedule, from);
+        requireInMonth(schedule, last);
+
+        List<CrewShift> before = new ArrayList<>(schedule.getCrewShifts());
+        try {
+            schedule.getCrewShifts().removeIf(shift -> shift.getLine().equals(line) && !shift.isPinned()
+                    && !shift.getDate().isBefore(from) && !shift.getDate().isAfter(last));
+            for (int day = 0; day < SAMPLE_DAYS; day++) {
+                Integer crewId = crewIds.get(day);
+                if (crewId == null) {
+                    continue;
+                }
+                LocalDate date = from.plusDays(day);
+                Optional<CrewShift> pinned = schedule.getCrewShifts().stream()
+                        .filter(shift -> shift.getLine().equals(line) && shift.getDate().equals(date)
+                                && shift.getType() == ShiftType.DAY)
+                        .findFirst();
+                if (pinned.isEmpty()) {
+                    addCrewShift(schedule, new CrewShiftRequest(date, ShiftType.DAY, line.getId(), crewId))
+                            .setPinned(true);
+                } else if (!pinned.get().getCrew().getId().equals(crewId)) {
+                    throw new IllegalStateException("Дневная смена " + date + " закреплена за бригадой "
+                            + pinned.get().getCrew() + ". Сначала открепите её.");
+                }
+            }
+        } catch (RuntimeException e) {
+            schedule.getCrewShifts().clear();
+            schedule.getCrewShifts().addAll(before);
+            throw e;
+        }
     }
 
     /** Moves an employee to another crew for the whole month (see {@link #moveEmployee(CrewSchedule, int, int, LocalDate)}). */
@@ -305,6 +387,11 @@ public class CrewScheduleEditor {
         return find(schedule.getCrewShifts(), c -> c.getId().equals(crewShiftId), "Crew shift " + crewShiftId);
     }
 
+    private static Line findLine(CrewSchedule schedule, String lineId) {
+        String trimmed = lineId == null ? "" : lineId.trim();
+        return find(schedule.getLines(), l -> l.getId().equals(trimmed), "Line " + trimmed);
+    }
+
     private static Crew findCrew(CrewSchedule schedule, int crewId) {
         return find(schedule.getCrews(), c -> c.getId().equals(crewId), "Crew " + crewId);
     }
@@ -320,6 +407,13 @@ public class CrewScheduleEditor {
 
     /** Where a crew works: line, date and shift. */
     public record CrewShiftRequest(LocalDate date, ShiftType type, String lineId, Integer crewId) {
+    }
+
+    /**
+     * @param from       first day of the sample; null: the 1st of the month
+     * @param dayCrewIds DAY crews of the 4 days; at most one null
+     */
+    public record SampleRequest(LocalDate from, List<Integer> dayCrewIds) {
     }
 
     /** {@code to} is ignored for a dismissal. */

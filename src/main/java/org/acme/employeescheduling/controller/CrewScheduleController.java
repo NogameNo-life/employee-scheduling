@@ -17,11 +17,13 @@ import org.acme.employeescheduling.service.CrewRosterService;
 import org.acme.employeescheduling.service.CrewRosterService.CrewDetails;
 import org.acme.employeescheduling.service.CrewRosterService.Rotation;
 import org.acme.employeescheduling.service.CrewRotationGenerator;
+import org.acme.employeescheduling.service.CrewRotationGenerator.GeneratePreview;
 import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateRequest;
 import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateResult;
 import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
+import org.acme.employeescheduling.service.CrewScheduleEditor.SampleRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
 import org.acme.employeescheduling.service.ScheduleValidator;
@@ -132,8 +134,8 @@ public class CrewScheduleController {
 
     /**
      * Fills the crew schedule with the rotation Day - Night - Sleep day - Day off (see
-     * {@link CrewRotationGenerator}). 400: invalid request, 404: unknown line, 409: the earlier crew shifts of a
-     * line do not fit one rotation (choose the start crew).
+     * {@link CrewRotationGenerator}). 400: invalid request, 404: unknown line. Places that cannot be filled stay
+     * empty and are listed in {@code generation.messages}.
      */
     @PostMapping("/generate")
     public RotationResponse generate(
@@ -143,6 +145,38 @@ public class CrewScheduleController {
         ScheduleVersion version = sessionService.edit(sessionId,
                 schedule -> result[0] = generator.generate(schedule, request));
         return toResponse(sessionId, version, result[0]);
+    }
+
+    /** Pinned, unpinned and empty places from {@code from} to the end of the month, per line and in total. */
+    @GetMapping("/generate/preview")
+    public GeneratePreview previewGeneration(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestParam(required = false) String lineId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from) {
+        GeneratePreview[] preview = new GeneratePreview[1];
+        sessionService.edit(sessionId, schedule -> preview[0] = generator.preview(schedule, lineId, from));
+        return preview[0];
+    }
+
+    /**
+     * Sets the sample of a line: the pinned DAY crews of 4 days in a row. Does not generate. 400: invalid sample,
+     * 404: unknown line or crew, 409: conflict with a pinned shift or another line (nothing changes).
+     */
+    @PutMapping("/lines/{lineId}/sample")
+    public RotationResponse setLineSample(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @PathVariable String lineId, @RequestBody SampleRequest request) {
+        return toResponse(sessionId, sessionService.edit(sessionId,
+                schedule -> editor.setLineSample(schedule, lineId, request)));
+    }
+
+    /** Pins or unpins every crew shift of a line (null: all lines) in a date range. */
+    @PostMapping("/crew-shifts/pinned")
+    public RotationResponse setPinnedInRange(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestBody BulkPinnedRequest request) {
+        return toResponse(sessionId, sessionService.edit(sessionId, schedule -> editor.setPinnedInRange(schedule,
+                request.lineId(), request.from(), request.to(), request.pinned())));
     }
 
     /** Puts a crew on a line for one shift (409 if the line shift already has a crew). */
@@ -277,6 +311,14 @@ public class CrewScheduleController {
     }
 
     public record PinnedRequest(boolean pinned) {
+    }
+
+    /**
+     * @param lineId null: all lines
+     * @param from   null: the 1st of the month
+     * @param to     null: the end of the month
+     */
+    public record BulkPinnedRequest(String lineId, LocalDate from, LocalDate to, boolean pinned) {
     }
 
     public record ReplacementRequest(Integer employeeId, Integer substituteId) {

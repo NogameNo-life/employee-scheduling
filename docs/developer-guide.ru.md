@@ -204,14 +204,14 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 
 ### Генератор: `CrewRotationGenerator`
 
-Цикл День → Ночь → Отсыпной → Выходной. Бригады линии (`Crew.lineId` = `Line.id`) по номеру c0..c3, порядок
-дневных смен D = [c0, c2, c3, c1]; день i от даты `from`: дневная — D[(i + s) mod 4], ночная —
-D[(i + s − 1) mod 4]. Сдвиг s: из `startCrewId`, иначе из последней смены каждой бригады линии на этой линии до
-`from` (разные сдвиги — `IllegalStateException`, 409), иначе 0. Сначала проверяются все линии и считаются сдвиги,
-потом меняется версия, поэтому при ошибке ничего не меняется. Смены создаются через
-`CrewScheduleEditor.addCrewShift`; если редактор отказывает (бригада занята), смена остаётся пустой с сообщением.
-Линия не с 4 бригадами пропускается. Закреплённые смены не меняются. Вызывается через
-`CrewScheduleSessionService.edit`, как редактор.
+Цикл День → Ночь → Отсыпной → Выходной. У бригады цикла есть фаза 0..3: день на d при `(epochDay(d) − фаза) mod 4 = 0`,
+ночь на следующую дату. Источники фаз: опорные смены линии (закреплённые, при `overwrite = false` и незакреплённые,
+а также всё до `from`; для даты — последняя опорная не позже неё, иначе самая ранняя после), затем TODO — предыдущий
+месяц, затем порядок по умолчанию [c0, c2, c3, c1] своих бригад (`Crew.lineId`) от `from` или `startCrewId`. Цикл
+линии = бригады опорных смен + свои бригады до 4, не занятые в цикле другой линии этого запуска. Сначала считаются
+планы всех линий, затем удаляются незакреплённые (`overwrite`), затем заполняются только пустые места через
+`CrewScheduleEditor.addCrewShift`. Нет бригады, две бригады или занятая бригада — место пустое и сообщение, без
+исключения. Вызывается через `CrewScheduleSessionService.edit`, как редактор.
 
 ### Предупреждения: `ScheduleValidator`
 
@@ -239,7 +239,10 @@ D[(i + s − 1) mod 4]. Сдвиг s: из `startCrewId`, иначе из пос
 | GET | `/crew-schedules/crews` | | Бригады с линиями (где работают в версии) и сотрудниками |
 | GET | `/crew-schedules/lines` | | Линии текущего месяца; работает без версии |
 | POST | `/crew-schedules/init?month=yyyy-MM&generate=false` | | Новая версия на месяц (без `month` — текущий); `generate=true` — сразу сгенерировать все линии |
-| POST | `/crew-schedules/generate` | `{lineId?, from?, startCrewId?, overwrite}` | Заполнить график по циклу (`generation`: `created`, `kept`, `messages`) |
+| POST | `/crew-schedules/generate` | `{lineId?, from?, startCrewId?, overwrite, pin}` | Заполнить график по циклу (`generation`: `created`, `kept`, `messages`) |
+| GET | `/crew-schedules/generate/preview?lineId=&from=` | | Закреплённые, незакреплённые и пустые места по линиям и всего |
+| PUT | `/crew-schedules/lines/{lineId}/sample` | `{from?, dayCrewIds}` | Очередь бригад: закреплённые дневные смены 4 дней |
+| POST | `/crew-schedules/crew-shifts/pinned` | `{lineId?, from?, to?, pinned}` | Закрепить / открепить период |
 | POST | `/crew-schedules/crew-shifts` | `{date, type, lineId, crewId}` | Поставить бригаду на смену |
 | PUT | `/crew-schedules/crew-shifts/{id}` | `{date, type, lineId, crewId}` | Перенести смену или поменять бригаду |
 | DELETE | `/crew-schedules/crew-shifts/{id}` | | Удалить смену |
@@ -293,7 +296,7 @@ mvn test
 | Тест | Что проверяет |
 | --- | --- |
 | `CrewScheduleEditorTest` | Правила редактора |
-| `CrewRotationGeneratorTest` | Таблица цикла, бригада начала, продолжение, конфликт, закреплённые, overwrite, линия без 4 бригад, месяцы 28/30/31 дней, занятая бригада |
+| `CrewRotationGeneratorTest` | Порядок по умолчанию, очереди (своя, с чужой бригадой, из 3 бригад), опорные смены, overwrite, обмен 10-го, конфликт фаз, предпросмотр, `pin`, массовое открепление, месяцы 28/30/31 дней, занятая бригада |
 | `ScheduleValidatorTest` | Правило отдыха: бригады, две линии, замена, отсутствие, время из `PLR_SM` |
 | `CrewScheduleFactoryTest` | Создание и копирование версий |
 | `CrewScheduleRepositoryTest` | Хранение версий |
