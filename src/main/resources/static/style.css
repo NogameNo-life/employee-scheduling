@@ -359,8 +359,6 @@ body {
 .shift-card.deficit { background: var(--deficit-bg); border-color: #fda4af; }
 .shift-card.deficit .people { color: var(--deficit-text); }
 .shift-card.rest-warning { border: 1.5px solid var(--warning); box-shadow: 0 0 0 1px var(--warning-bg); }
-.shift-card.pinned { border-width: 2px; border-color: var(--c-primary); }
-.shift-card.pinned.rest-warning { border-color: var(--warning); }
 .shift-card.selected { outline: 2px solid var(--c-primary); outline-offset: 1px; }
 
 .shift-card.empty {
