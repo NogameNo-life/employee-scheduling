@@ -239,8 +239,8 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 | GET | `/crew-schedules/crews` | | Бригады с линиями (где работают в версии) и сотрудниками |
 | GET | `/crew-schedules/lines` | | Линии текущего месяца; работает без версии |
 | POST | `/crew-schedules/init?month=yyyy-MM&generate=false` | | Новая версия на месяц (без `month` — текущий); `generate=true` — сразу сгенерировать все линии |
-| POST | `/crew-schedules/generate` | `{lineId?, from?, startCrewId?, overwrite, pin}` | Заполнить график по циклу (`generation`: `created`, `kept`, `messages`) |
-| GET | `/crew-schedules/generate/preview?lineId=&from=` | | Закреплённые, незакреплённые и пустые места по линиям и всего |
+| POST | `/crew-schedules/generate` | `{lineId?, from?, to?, startCrewId?, overwrite, pin}` | Заполнить график по циклу (`generation`: `created`, `kept`, `messages`) |
+| GET | `/crew-schedules/generate/preview?lineId=&from=&to=` | | Закреплённые, незакреплённые и пустые места периода по линиям и всего |
 | PUT | `/crew-schedules/lines/{lineId}/sample` | `{from?, dayCrewIds}` | Очередь бригад: закреплённые дневные смены 4 дней |
 | POST | `/crew-schedules/crew-shifts/pinned` | `{lineId?, from?, to?, pinned}` | Закрепить / открепить период |
 | POST | `/crew-schedules/crew-shifts` | `{date, type, lineId, crewId}` | Поставить бригаду на смену |

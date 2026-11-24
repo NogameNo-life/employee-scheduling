@@ -37,6 +37,8 @@ let shiftTimes = [
 ];
 // The generation waiting for the answer of the overwrite dialog: {lineId, from, startCrewId, pin}
 let pendingGeneration = null;
+// The period of the generation that was just sent ({from, to}), for the result toast
+let generationPeriod = null;
 // The line of the open sample dialog
 let sampleLineId = null;
 // Lookups, built again for every version (buildIndex)
@@ -49,6 +51,7 @@ $(document).ready(function () {
   $("#newMonthModalSave").click(startNewMonth);
   $("#generateButton").click(openGenerateDialog);
   $("#generateLine").on("change", renderGenerateStartCrews);
+  $("#generateFrom").on("change", onGenerateFromChange);
   $("#generateModalSave").click(startGeneration);
   $("#overwriteModalReplace").click(() => answerOverwrite(true));
   $("#overwriteModalFill").click(() => answerOverwrite(false));
@@ -908,6 +911,8 @@ function openGenerateDialog() {
   const month = JSJoda.YearMonth.parse(shownMonth);
   const range = {min: month.atDay(1).toString(), max: month.atEndOfMonth().toString()};
   $("#generateFrom").val(range.min).attr(range);
+  // "По дату": the last day of the shown month (also after the month changed)
+  $("#generateTo").val(range.max).attr(range);
   $("#bulkPinFrom").val(range.min).attr(range);
   $("#bulkPinTo").val(range.max).attr(range);
   $("#generatePin").prop("checked", true);
@@ -931,6 +936,16 @@ function renderGenerateLines() {
       .text("Задать очередь бригад"))));
 }
 
+// "По дату" cannot be before "С даты"
+function onGenerateFromChange() {
+  const from = $("#generateFrom").val();
+  const month = JSJoda.YearMonth.parse(shownMonth);
+  $("#generateTo").attr("min", from || month.atDay(1).toString());
+  if (from && $("#generateTo").val() && $("#generateTo").val() < from) {
+    $("#generateTo").val(from);
+  }
+}
+
 // A start crew can only be chosen for one line, from the crews of that line (Crew.lineId)
 function renderGenerateStartCrews() {
   const lineId = $("#generateLine").val();
@@ -945,9 +960,16 @@ function renderGenerateStartCrews() {
 
 function startGeneration() {
   const startCrewId = $("#generateStartCrew").val();
+  const from = $("#generateFrom").val() || null;
+  const to = $("#generateTo").val() || null; // empty: up to the end of the month
+  if (from && to && to < from) {
+    showSimpleError("Дата «по» раньше даты «с».");
+    return;
+  }
   runGeneration({
     lineId: $("#generateLine").val() || null,
-    from: $("#generateFrom").val() || null,
+    from: from,
+    to: to,
     startCrewId: startCrewId ? parseInt(startCrewId) : null,
     pin: $("#generatePin").is(":checked")
   });
@@ -962,16 +984,20 @@ function runGeneration(request) {
   if (request.from) {
     params.set("from", request.from);
   }
+  if (request.to) {
+    params.set("to", request.to);
+  }
   $.getJSON(`/crew-schedules/generate/preview?${params}`, preview => {
     const total = preview.total;
+    const period = periodText(preview.from, preview.to);
     if (total.empty === 0 && total.unpinned === 0) {
       modal("generateModal").hide();
-      showInfo("Месяц уже заполнен", "В выбранном периоде нет пустых и незакреплённых смен.");
+      showInfo("Месяц уже заполнен", `В период ${period} нет пустых и незакреплённых смен.`);
     } else if (total.unpinned === 0) {
-      sendGeneration(request, false);
+      sendGeneration(request, false, preview);
     } else {
-      pendingGeneration = request;
-      $("#overwriteModalText").text(`В выбранном периоде ${total.unpinned} ${plural(total.unpinned, "незакреплённая смена",
+      pendingGeneration = {request: request, preview: preview};
+      $("#overwriteModalText").text(`В период ${period}: ${total.unpinned} ${plural(total.unpinned, "незакреплённая смена",
         "незакреплённые смены", "незакреплённых смен")}. Что сделать?`);
       $("#overwriteModalPinned").text(`Закреплённые ${total.pinned} ${plural(total.pinned, "смена", "смены", "смен")} `
         + `${total.pinned === 1 ? "останется" : "останутся"}. Пустых мест: ${total.empty}.`);
@@ -983,19 +1009,29 @@ function runGeneration(request) {
 }
 
 function answerOverwrite(overwrite) {
-  const request = pendingGeneration;
+  const pending = pendingGeneration;
   pendingGeneration = null;
   modal("overwriteModal").hide();
-  if (request != null) {
-    sendGeneration(request, overwrite);
+  if (pending != null) {
+    sendGeneration(pending.request, overwrite, pending.preview);
   }
 }
 
-function sendGeneration(request, overwrite) {
+// preview: the answer of the preview, for the period in the result toast
+function sendGeneration(request, overwrite, preview) {
+  generationPeriod = {from: preview.from, to: preview.to};
   send("POST", "/crew-schedules/generate", {...request, overwrite: overwrite}).done(roster => {
     modal("generateModal").hide();
     onRosterChanged(roster);
-  }).fail(xhr => showError("Не удалось заполнить график.", xhr));
+  }).fail(xhr => {
+    generationPeriod = null;
+    showError("Не удалось заполнить график.", xhr);
+  });
+}
+
+// "с 05.11 по 15.11"
+function periodText(from, to) {
+  return `с ${shortDate(from)} по ${shortDate(to)}`;
 }
 
 // "Закрепить всё" / "Открепить всё" for the line chosen in the dialog (or all lines) and a date range
@@ -1083,6 +1119,8 @@ function saveSample(fill) {
 
 // What the generator did: created and kept shifts, messages (skipped lines, shifts left empty)
 function showGeneration(generation) {
+  const period = generationPeriod;
+  generationPeriod = null;
   if (generation == null) {
     return;
   }
@@ -1093,6 +1131,7 @@ function showGeneration(generation) {
       .append($(`<strong class="me-auto"/>`).text("Авто-заполнение"))
       .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Закрыть"/>`)))
     .append($(`<div class="toast-body"/>`)
+      .append(period == null ? null : $(`<p class="mb-1 fw-semibold"/>`).text(`Период: ${periodText(period.from, period.to)}`))
       .append($(`<p class="mb-1"/>`).text(`Создано смен: ${generation.created}, оставлено как было: ${generation.kept}.`))
       .append(generation.messages.length === 0 ? null : $(`<ul class="generation-messages small mb-0 ps-3"/>`)
         .append(generation.messages.map(message => $(`<li/>`).text(message)))));
@@ -1315,6 +1354,11 @@ function weekday(date) {
 
 function weekendClass(date) {
   return JSJoda.LocalDate.parse(date).dayOfWeek().value() >= 6 ? " weekend" : "";
+}
+
+// yyyy-MM-dd -> dd.MM
+function shortDate(date) {
+  return `${date.substring(8, 10)}.${date.substring(5, 7)}`;
 }
 
 // yyyy-MM-dd -> dd.MM.yyyy

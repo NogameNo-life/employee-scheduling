@@ -412,6 +412,110 @@ class CrewRotationGeneratorTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void periodFromTheFifthToTheFifteenthOnly() {
+        CrewSchedule schedule = schedule(NOVEMBER, false);
+        LocalDate fifth = NOVEMBER.atDay(5);
+        LocalDate fifteenth = NOVEMBER.atDay(15);
+
+        GenerateResult result = generator.generate(schedule,
+                new GenerateRequest("L1", fifth, fifteenth, null, false, false));
+
+        assertThat(result).isEqualTo(new GenerateResult(22, 0, List.of()));
+        assertThat(schedule.getCrewShifts())
+                .allMatch(shift -> !shift.getDate().isBefore(fifth) && !shift.getDate().isAfter(fifteenth));
+        // The default order starts on from
+        assertThat(row(schedule, "L1", ShiftType.DAY, fifth, 4)).containsExactly(11, 13, 14, 12);
+    }
+
+    @Test
+    void overwriteInsideThePeriodDoesNotTouchTheDaysAfterIt() {
+        CrewSchedule schedule = schedule(NOVEMBER, false);
+        generator.generate(schedule, new GenerateRequest("L1", null, null, false));
+        editor.setPinnedInRange(schedule, "L1", NOVEMBER.atDay(20), NOVEMBER.atDay(20), true);
+        List<CrewShift> after = schedule.getCrewShifts().stream()
+                .filter(shift -> shift.getDate().isAfter(NOVEMBER.atDay(15))).toList();
+        Map<String, Boolean> pinnedAfter = new TreeMap<>();
+        after.forEach(shift -> pinnedAfter.put(shift.getId(), shift.isPinned()));
+        Map<String, Integer> before = snapshot(schedule);
+
+        GenerateResult result = generator.generate(schedule,
+                new GenerateRequest("L1", NOVEMBER.atDay(5), NOVEMBER.atDay(15), null, true, false));
+
+        assertThat(result.created()).isEqualTo(22);
+        assertThat(result.messages()).isEmpty();
+        // The same objects after the 15th (pinned or not), and the chain inside fits them
+        assertThat(schedule.getCrewShifts()).containsAll(after).hasSize(60);
+        after.forEach(shift -> assertThat(shift.isPinned()).isEqualTo(pinnedAfter.get(shift.getId())));
+        assertThat(after.stream().filter(CrewShift::isPinned).count()).isEqualTo(2);
+        assertThat(snapshot(schedule)).isEqualTo(before);
+    }
+
+    @Test
+    void toMustBeInTheMonthAndNotBeforeFrom() {
+        CrewSchedule schedule = schedule(NOVEMBER, false);
+        GenerateRequest toBeforeFrom = new GenerateRequest("L1", NOVEMBER.atDay(10), NOVEMBER.atDay(9), null, false,
+                false);
+        GenerateRequest toInNextMonth = new GenerateRequest("L1", null, NOVEMBER.plusMonths(1).atDay(1), null, false,
+                false);
+
+        assertThatThrownBy(() -> generator.generate(schedule, toBeforeFrom))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("раньше даты начала");
+        assertThatThrownBy(() -> generator.generate(schedule, toInNextMonth))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> generator.preview(schedule, null, NOVEMBER.atDay(10), NOVEMBER.atDay(9)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(schedule.getCrewShifts()).isEmpty();
+    }
+
+    @Test
+    void keptShiftsAfterThePeriodThatFitTheChainGiveNoMessage() {
+        CrewSchedule schedule = schedule(NOVEMBER, false);
+        generator.generate(schedule, new GenerateRequest("L1", null, null, false));
+        Map<String, Integer> full = snapshot(schedule);
+        schedule.getCrewShifts().removeIf(shift -> shift.getDate().getDayOfMonth() >= 5
+                && shift.getDate().getDayOfMonth() <= 15);
+
+        GenerateResult result = generator.generate(schedule,
+                new GenerateRequest("L1", NOVEMBER.atDay(5), NOVEMBER.atDay(15), null, false, false));
+
+        assertThat(result.messages()).isEmpty();
+        assertThat(snapshot(schedule)).isEqualTo(full);
+    }
+
+    @Test
+    void keptShiftsAfterThePeriodThatDoNotFitTheChainGiveAMessage() {
+        CrewSchedule schedule = schedule(NOVEMBER, false);
+        generator.generate(schedule, new GenerateRequest("L1", null, null, false));
+        LocalDate sixteenth = NOVEMBER.atDay(16);
+        assertThat(crewAt(schedule, "L1", sixteenth, ShiftType.DAY)).isEqualTo(12);
+        schedule.getCrewShifts().removeIf(shift -> shift.getDate().getDayOfMonth() >= 5
+                && shift.getDate().getDayOfMonth() <= 15);
+        editor.moveCrewShift(schedule, sixteenth + "-DAY-L1", new CrewShiftRequest(sixteenth, ShiftType.DAY, "L1", 11));
+
+        GenerateResult result = generator.generate(schedule,
+                new GenerateRequest("L1", NOVEMBER.atDay(5), NOVEMBER.atDay(15), null, false, false));
+
+        assertThat(result.messages()).containsExactly("Линия L1: цикл не совпадает со сменами после 2026-11-15.");
+        // Nothing after the period was changed
+        assertThat(crewAt(schedule, "L1", sixteenth, ShiftType.DAY)).isEqualTo(11);
+        assertThat(result.created()).isEqualTo(22);
+    }
+
+    @Test
+    void previewCountsOnlyThePeriod() {
+        CrewSchedule schedule = schedule(NOVEMBER, false);
+        editor.addCrewShift(schedule, new CrewShiftRequest(NOVEMBER.atDay(10), ShiftType.DAY, "L1", 11));
+        editor.addCrewShift(schedule, new CrewShiftRequest(NOVEMBER.atDay(16), ShiftType.DAY, "L1", 12));
+
+        GeneratePreview preview = generator.preview(schedule, "L1", NOVEMBER.atDay(5), NOVEMBER.atDay(15));
+
+        assertThat(preview.from()).isEqualTo(NOVEMBER.atDay(5));
+        assertThat(preview.to()).isEqualTo(NOVEMBER.atDay(15));
+        assertThat(preview.total()).isEqualTo(new PlaceCounts(0, 1, 21));
+        assertThat(generator.preview(schedule, "L1", NOVEMBER.atDay(5)).to()).isEqualTo(NOVEMBER.atEndOfMonth());
+    }
+
     @ParameterizedTest
     @CsvSource({ "2027-02, 28", "2026-11, 30", "2026-12, 31" })
     void everyDayOfTheMonth(String month, int days) {

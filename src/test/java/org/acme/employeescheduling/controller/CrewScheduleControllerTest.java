@@ -118,6 +118,13 @@ class CrewScheduleControllerTest {
                 .andExpect(status().isBadRequest());
         mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"L9\"}"))
                 .andExpect(status().isNotFound());
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"from\": \"2026-11-10\", \"to\": \"2026-11-05\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(containsString("раньше даты начала")));
+        mvc.perform(get("/crew-schedules/generate/preview").param("from", "2026-11-05").param("to", "2026-11-15"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.to").value("2026-11-15"))
+                .andExpect(jsonPath("$.total.empty").value(2 * 11 * 2));
     }
 
     @Test

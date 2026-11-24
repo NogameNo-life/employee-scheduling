@@ -59,6 +59,9 @@
         <span class="fas fa-save me-1"></span>Сохранить
       </button>
     </span>
+    <a href="/instruction.html" target="_blank" rel="noopener" class="btn btn-outline-dark" id="instructionButton">
+      <span class="fas fa-question-circle me-1"></span>Инструкция
+    </a>
   </div>
 </header>
 
@@ -120,13 +123,22 @@
       </div>
       <div class="modal-body">
         <p class="text-muted small">
-          Цикл День → Ночь → Отсыпной → Выходной до конца месяца. Линия со своей очередью или закреплёнными сменами
+          Цикл День → Ночь → Отсыпной → Выходной в выбранном периоде. Линия со своей очередью или закреплёнными сменами
           продолжает их, остальные идут по умолчанию. Закреплённые смены не меняются.
         </p>
         <label for="generateLine" class="form-label">Линия</label>
         <select id="generateLine" class="form-select mb-2"></select>
-        <label for="generateFrom" class="form-label">С даты</label>
-        <input id="generateFrom" type="date" class="form-control mb-2">
+        <div class="row g-2 mb-2">
+          <div class="col">
+            <label for="generateFrom" class="form-label">С даты</label>
+            <input id="generateFrom" type="date" class="form-control">
+          </div>
+          <div class="col">
+            <label for="generateTo" class="form-label">По дату</label>
+            <input id="generateTo" type="date" class="form-control" aria-describedby="generateToHint">
+          </div>
+        </div>
+        <p class="text-muted small" id="generateToHint">Пустая дата «по» — до конца месяца. Смены после неё не меняются.</p>
         <label for="generateStartCrew" class="form-label">Бригада в дневную смену первого дня</label>
         <select id="generateStartCrew" class="form-select mb-2"></select>
         <div class="form-check mb-3">

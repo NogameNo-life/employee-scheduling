@@ -3,6 +3,7 @@ package org.acme.employeescheduling.service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -26,7 +27,8 @@ import org.acme.employeescheduling.domain.ShiftType;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 
 /**
- * Fills the empty places of the crew schedule with the rotation "Day -> Night -> Sleep day -> Day off".
+ * Fills the empty places of the crew schedule from {@code from} to {@code to} (default: the end of the month) with
+ * the rotation "Day -> Night -> Sleep day -> Day off". Crew shifts outside that period are never changed.
  *
  * <p>
  * Every crew of a line's cycle has a <b>phase</b> (0..3): it works DAY on every date d with
@@ -34,7 +36,7 @@ import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
  * the phases, in priority:
  * <ol>
  * <li>anchors = the crew shifts of the line that stay (pinned; with {@code overwrite = false} also the unpinned ones;
- * shifts before {@code from} are never removed, so they stay too). For a date d, a crew follows its latest anchor on
+ * shifts before {@code from} and after {@code to} are never removed, so they stay too). For a date d, a crew follows its latest anchor on
  * or before d, else its earliest anchor after d;</li>
  * <li>TODO: the last week of the previous month, when the plan tables (PLR_SNAR) exist;</li>
  * <li>default: the line's own crews ({@link Crew#getLineId()}) sorted by id (c0..c3), DAY order [c0, c2, c3, c1]
@@ -62,6 +64,7 @@ public class CrewRotationGenerator {
         GenerateRequest checked = request == null ? new GenerateRequest(null, null, null, false) : request;
         YearMonth month = schedule.getMonth();
         LocalDate from = resolveFrom(schedule, checked.from());
+        LocalDate to = resolveTo(schedule, from, checked.to());
         if (checked.startCrewId() != null && checked.lineId() == null) {
             throw new IllegalArgumentException("Бригаду, которая начинает, можно выбрать только для одной линии.");
         }
@@ -78,7 +81,8 @@ public class CrewRotationGenerator {
         for (Line line : lines) {
             List<CrewShift> staying = schedule.getCrewShifts().stream()
                     .filter(shift -> shift.getLine().equals(line)
-                            && (shift.isPinned() || !checked.overwrite() || shift.getDate().isBefore(from)))
+                            && (shift.isPinned() || !checked.overwrite() || shift.getDate().isBefore(from)
+                                    || shift.getDate().isAfter(to)))
                     .toList();
             anchors.put(line, staying);
             staying.forEach(shift -> taken.add(shift.getCrew()));
@@ -102,14 +106,14 @@ public class CrewRotationGenerator {
 
         // 2) Remove first on all lines, so a crew freed on one line can be used on another
         if (checked.overwrite()) {
-            plans.forEach(plan -> removeUnpinned(schedule, plan.line(), from));
+            plans.forEach(plan -> removeUnpinned(schedule, plan.line(), from, to));
         }
 
         // 3) Fill the empty places
         int created = 0;
         int kept = 0;
         for (LinePlan plan : plans) {
-            for (LocalDate date = from; !date.isAfter(month.atEndOfMonth()); date = date.plusDays(1)) {
+            for (LocalDate date = from; !date.isAfter(to); date = date.plusDays(1)) {
                 Map<Crew, Integer> phases = phasesOn(plan, date);
                 for (ShiftType type : ShiftType.values()) {
                     if (findShift(schedule, plan.line(), date, type).isPresent()) {
@@ -134,13 +138,23 @@ public class CrewRotationGenerator {
                 }
             }
         }
+        // 4) The kept crew shifts right after the period are not changed: only say if the chain does not fit them
+        for (LinePlan plan : plans) {
+            chainMessage(schedule, plan.line(), to).ifPresent(messages::add);
+        }
         return new GenerateResult(created, kept, List.copyOf(messages));
     }
 
-    /** Counts the places from {@code from} to the end of the month, per line and in total. Changes nothing. */
+    /** {@link #preview(CrewSchedule, String, LocalDate, LocalDate)} up to the end of the month. */
     public GeneratePreview preview(CrewSchedule schedule, String lineId, LocalDate requestedFrom) {
+        return preview(schedule, lineId, requestedFrom, null);
+    }
+
+    /** Counts the places from {@code from} to {@code to} (null: the end of the month), per line and in total. */
+    public GeneratePreview preview(CrewSchedule schedule, String lineId, LocalDate requestedFrom, LocalDate requestedTo) {
         LocalDate from = resolveFrom(schedule, requestedFrom);
-        int places = (schedule.getMonth().lengthOfMonth() - from.getDayOfMonth() + 1) * ShiftType.values().length;
+        LocalDate to = resolveTo(schedule, from, requestedTo);
+        int places = (int) (ChronoUnit.DAYS.between(from, to) + 1) * ShiftType.values().length;
         List<LinePreview> result = new ArrayList<>();
         int totalPinned = 0;
         int totalUnpinned = 0;
@@ -148,7 +162,7 @@ public class CrewRotationGenerator {
             int pinned = 0;
             int unpinned = 0;
             for (CrewShift shift : schedule.getCrewShifts()) {
-                if (shift.getLine().equals(line) && !shift.getDate().isBefore(from)) {
+                if (shift.getLine().equals(line) && !shift.getDate().isBefore(from) && !shift.getDate().isAfter(to)) {
                     if (shift.isPinned()) {
                         pinned++;
                     } else {
@@ -161,7 +175,7 @@ public class CrewRotationGenerator {
             totalUnpinned += unpinned;
         }
         int totalEmpty = places * result.size() - totalPinned - totalUnpinned;
-        return new GeneratePreview(from, result, new PlaceCounts(totalPinned, totalUnpinned, totalEmpty));
+        return new GeneratePreview(from, to, result, new PlaceCounts(totalPinned, totalUnpinned, totalEmpty));
     }
 
     private static LocalDate resolveFrom(CrewSchedule schedule, LocalDate from) {
@@ -170,6 +184,37 @@ public class CrewRotationGenerator {
             throw new IllegalArgumentException("Дата " + resolved + " не в месяце " + schedule.getMonth() + ".");
         }
         return resolved;
+    }
+
+    private static LocalDate resolveTo(CrewSchedule schedule, LocalDate from, LocalDate to) {
+        LocalDate resolved = to == null ? schedule.getMonth().atEndOfMonth() : to;
+        if (!YearMonth.from(resolved).equals(schedule.getMonth())) {
+            throw new IllegalArgumentException("Дата окончания " + resolved + " не в месяце " + schedule.getMonth() + ".");
+        }
+        if (resolved.isBefore(from)) {
+            throw new IllegalArgumentException("Дата окончания " + resolved + " раньше даты начала " + from + ".");
+        }
+        return resolved;
+    }
+
+    /**
+     * A message if a kept crew shift on {@code to + 1} does not continue the chain: NIGHT on to + 1 = the DAY crew of
+     * {@code to}, DAY on to + 1 = the DAY crew of to - 3. Places without a shift are not checked.
+     */
+    private static Optional<String> chainMessage(CrewSchedule schedule, Line line, LocalDate to) {
+        LocalDate next = to.plusDays(1);
+        if (!YearMonth.from(next).equals(schedule.getMonth())) {
+            return Optional.empty();
+        }
+        boolean fits = sameCrew(findShift(schedule, line, next, ShiftType.NIGHT), findShift(schedule, line, to, ShiftType.DAY))
+                && sameCrew(findShift(schedule, line, next, ShiftType.DAY),
+                        findShift(schedule, line, to.minusDays(CYCLE - 1L), ShiftType.DAY));
+        return fits ? Optional.empty()
+                : Optional.of("Линия " + line.getId() + ": цикл не совпадает со сменами после " + to + ".");
+    }
+
+    private static boolean sameCrew(Optional<CrewShift> kept, Optional<CrewShift> chain) {
+        return kept.isEmpty() || chain.isEmpty() || kept.get().getCrew().equals(chain.get().getCrew());
     }
 
     private static List<Line> resolveLines(CrewSchedule schedule, String lineId) {
@@ -302,9 +347,10 @@ public class CrewRotationGenerator {
                 + ", потому что очередь задана оставшимися сменами.");
     }
 
-    private void removeUnpinned(CrewSchedule schedule, Line line, LocalDate from) {
+    private void removeUnpinned(CrewSchedule schedule, Line line, LocalDate from, LocalDate to) {
         schedule.getCrewShifts().stream()
-                .filter(shift -> shift.getLine().equals(line) && !shift.getDate().isBefore(from) && !shift.isPinned())
+                .filter(shift -> shift.getLine().equals(line) && !shift.getDate().isBefore(from)
+                        && !shift.getDate().isAfter(to) && !shift.isPinned())
                 .map(CrewShift::getId)
                 .toList()
                 .forEach(id -> editor.removeCrewShift(schedule, id));
@@ -367,16 +413,24 @@ public class CrewRotationGenerator {
     /**
      * @param lineId      null: every line of the version
      * @param from        first generated date; null: the 1st of the version's month
+     * @param to          last generated date (included); null: the last day of the version's month
      * @param startCrewId own crew of the line that works DAY on {@code from} in the default order; only with a
      *                    {@code lineId}; anchors have priority
-     * @param overwrite   true: remove the unpinned crew shifts of the generated lines from {@code from} on first;
+     * @param overwrite   true: remove the unpinned crew shifts of the generated lines in {@code from}..{@code to} first;
      *                    false: keep them as anchors and only fill the empty places
      * @param pin         true: the crew shifts created by the generator are pinned
      */
-    public record GenerateRequest(String lineId, LocalDate from, Integer startCrewId, boolean overwrite, boolean pin) {
+    public record GenerateRequest(String lineId, LocalDate from, LocalDate to, Integer startCrewId, boolean overwrite,
+            boolean pin) {
 
+        /** Up to the end of the month, not pinned. */
         public GenerateRequest(String lineId, LocalDate from, Integer startCrewId, boolean overwrite) {
-            this(lineId, from, startCrewId, overwrite, false);
+            this(lineId, from, null, startCrewId, overwrite, false);
+        }
+
+        /** Up to the end of the month. */
+        public GenerateRequest(String lineId, LocalDate from, Integer startCrewId, boolean overwrite, boolean pin) {
+            this(lineId, from, null, startCrewId, overwrite, pin);
         }
     }
 
@@ -394,7 +448,7 @@ public class CrewRotationGenerator {
     public record LinePreview(String lineId, String lineName, int pinned, int unpinned, int empty) {
     }
 
-    /** Places (line, date, shift) from {@code from} to the end of the month. */
-    public record GeneratePreview(LocalDate from, List<LinePreview> lines, PlaceCounts total) {
+    /** Places (line, date, shift) from {@code from} to {@code to}, both included. */
+    public record GeneratePreview(LocalDate from, LocalDate to, List<LinePreview> lines, PlaceCounts total) {
     }
 }

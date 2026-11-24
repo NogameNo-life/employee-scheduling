@@ -562,3 +562,6 @@ body {
   .drawer { position: static; width: 100%; flex-basis: auto; max-height: none; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Instruction page (instruction.html) */
+.instruction { max-width: 960px; padding: var(--space-xl); line-height: 1.6; }

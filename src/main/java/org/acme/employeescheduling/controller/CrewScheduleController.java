@@ -147,14 +147,15 @@ public class CrewScheduleController {
         return toResponse(sessionId, version, result[0]);
     }
 
-    /** Pinned, unpinned and empty places from {@code from} to the end of the month, per line and in total. */
+    /** Pinned, unpinned and empty places from {@code from} to {@code to} (null: end of month), per line and in total. */
     @GetMapping("/generate/preview")
     public GeneratePreview previewGeneration(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
             @RequestParam(required = false) String lineId,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from) {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         GeneratePreview[] preview = new GeneratePreview[1];
-        sessionService.edit(sessionId, schedule -> preview[0] = generator.preview(schedule, lineId, from));
+        sessionService.edit(sessionId, schedule -> preview[0] = generator.preview(schedule, lineId, from, to));
         return preview[0];
     }
 
