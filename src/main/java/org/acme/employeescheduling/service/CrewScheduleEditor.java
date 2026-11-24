@@ -85,6 +85,26 @@ public class CrewScheduleEditor {
      * @return how many crew shifts are in the range
      */
     public int setPinnedInRange(CrewSchedule schedule, String lineId, LocalDate from, LocalDate to, boolean pinned) {
+        List<CrewShift> shifts = shiftsInRange(schedule, lineId, from, to);
+        shifts.forEach(shift -> shift.setPinned(pinned));
+        return shifts.size();
+    }
+
+    /**
+     * Removes the crew shifts of a line (null: all lines) from {@code from} to {@code to}, both included (null dates:
+     * the first / last day of the month), with their people changes (absent and extra employees are kept in the
+     * crew shift, so they go with it). Pinned crew shifts only with {@code includePinned}.
+     */
+    public ClearResult clearCrewShifts(CrewSchedule schedule, String lineId, LocalDate from, LocalDate to,
+            boolean includePinned) {
+        List<CrewShift> shifts = shiftsInRange(schedule, lineId, from, to);
+        List<CrewShift> removed = shifts.stream().filter(shift -> includePinned || !shift.isPinned()).toList();
+        schedule.getCrewShifts().removeAll(removed);
+        return new ClearResult(removed.size(), shifts.size() - removed.size());
+    }
+
+    /** The crew shifts of a line (null or blank: all lines) in a date range of the version's month. */
+    private static List<CrewShift> shiftsInRange(CrewSchedule schedule, String lineId, LocalDate from, LocalDate to) {
         LocalDate first = from == null ? schedule.getMonth().atDay(1) : from;
         LocalDate last = to == null ? schedule.getMonth().atEndOfMonth() : to;
         requireInMonth(schedule, first);
@@ -93,15 +113,10 @@ public class CrewScheduleEditor {
             throw new IllegalArgumentException("Дата начала " + first + " позже даты конца " + last + ".");
         }
         String line = lineId == null || lineId.isBlank() ? null : findLine(schedule, lineId).getId();
-        int count = 0;
-        for (CrewShift shift : schedule.getCrewShifts()) {
-            if ((line == null || shift.getLine().getId().equals(line)) && !shift.getDate().isBefore(first)
-                    && !shift.getDate().isAfter(last)) {
-                shift.setPinned(pinned);
-                count++;
-            }
-        }
-        return count;
+        return schedule.getCrewShifts().stream()
+                .filter(shift -> (line == null || shift.getLine().getId().equals(line))
+                        && !shift.getDate().isBefore(first) && !shift.getDate().isAfter(last))
+                .toList();
     }
 
     /**
@@ -403,6 +418,13 @@ public class CrewScheduleEditor {
     private static <T> T find(List<T> items, Predicate<T> predicate, String what) {
         return items.stream().filter(predicate).findFirst()
                 .orElseThrow(() -> new NoSuchElementException(what + " was not found in this schedule version."));
+    }
+
+    /**
+     * @param removed    crew shifts removed
+     * @param keptPinned pinned crew shifts in the range that were kept ({@code includePinned = false})
+     */
+    public record ClearResult(int removed, int keptPinned) {
     }
 
     /** Where a crew works: line, date and shift. */

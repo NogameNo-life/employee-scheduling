@@ -19,6 +19,7 @@ import org.acme.employeescheduling.domain.Line;
 import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.domain.ShiftType;
 import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
+import org.acme.employeescheduling.service.CrewScheduleEditor.ClearResult;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -339,4 +340,65 @@ class CrewScheduleEditorTest {
         return schedule.getEmployees().stream().filter(e -> e.getId() == id).findFirst().orElseThrow();
     }
 
+
+    /** L1: crew 1 DAY, L2: crew 2 DAY, on the 1st to the 5th; L1 on the 3rd is pinned. */
+    private void fiveDaysOnTwoLines() {
+        for (int day = 0; day < 5; day++) {
+            editor.addCrewShift(schedule, request(DAY1.plusDays(day), ShiftType.DAY, "L1", 1));
+            editor.addCrewShift(schedule, request(DAY1.plusDays(day), ShiftType.DAY, "L2", 2));
+        }
+        editor.setPinned(schedule, DAY1.plusDays(2) + "-DAY-L1", true);
+    }
+
+    @Test
+    void clearOneLineInAPeriodKeepsThePinnedAndTheShiftsOutside() {
+        fiveDaysOnTwoLines();
+
+        ClearResult result = editor.clearCrewShifts(schedule, "L1", DAY1.plusDays(1), DAY1.plusDays(3), false);
+
+        assertThat(result).isEqualTo(new ClearResult(2, 1));
+        assertThat(schedule.getCrewShifts()).extracting(CrewShift::getId).containsExactlyInAnyOrder(
+                DAY1 + "-DAY-L1", DAY1.plusDays(2) + "-DAY-L1", DAY1.plusDays(4) + "-DAY-L1",
+                DAY1 + "-DAY-L2", DAY1.plusDays(1) + "-DAY-L2", DAY1.plusDays(2) + "-DAY-L2",
+                DAY1.plusDays(3) + "-DAY-L2", DAY1.plusDays(4) + "-DAY-L2");
+    }
+
+    @Test
+    void clearAllLinesOfTheMonthIncludingThePinned() {
+        fiveDaysOnTwoLines();
+
+        assertThat(editor.clearCrewShifts(schedule, null, null, null, false)).isEqualTo(new ClearResult(9, 1));
+        assertThat(schedule.getCrewShifts()).hasSize(1);
+        assertThat(editor.clearCrewShifts(schedule, " ", null, null, true)).isEqualTo(new ClearResult(1, 0));
+        assertThat(schedule.getCrewShifts()).isEmpty();
+    }
+
+    @Test
+    void clearChecksThePeriodAndTheLineBeforeRemovingAnything() {
+        fiveDaysOnTwoLines();
+
+        assertThatThrownBy(() -> editor.clearCrewShifts(schedule, null, DAY1.plusDays(3), DAY1.plusDays(1), true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> editor.clearCrewShifts(schedule, null, DAY1.minusDays(1), null, true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> editor.clearCrewShifts(schedule, null, null, DAY1.plusMonths(1), true))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> editor.clearCrewShifts(schedule, "L9", null, null, true))
+                .isInstanceOf(NoSuchElementException.class);
+        assertThat(schedule.getCrewShifts()).hasSize(10);
+    }
+
+    @Test
+    void peopleChangesAreRemovedWithTheShift() {
+        editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+        editor.removeEmployeeFromShift(schedule, DAY1 + "-DAY-L1", 100);
+        editor.addEmployeeToShift(schedule, DAY1 + "-DAY-L1", 200); // Boris of crew 2 as a substitute
+
+        editor.clearCrewShifts(schedule, "L1", DAY1, DAY1, false);
+        CrewShift again = editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+
+        assertThat(again.getAbsentEmployees()).isEmpty();
+        assertThat(again.getExtraEmployees()).isEmpty();
+        assertThat(again.getEmployeeIds()).containsExactly(100);
+    }
 }

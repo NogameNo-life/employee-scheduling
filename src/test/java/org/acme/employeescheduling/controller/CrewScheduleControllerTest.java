@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -160,6 +161,46 @@ class CrewScheduleControllerTest {
         mvc.perform(json(post("/crew-schedules/crew-shifts/pinned"),
                 "{\"from\": \"2026-12-01\", \"pinned\": true}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void clearCrewShifts() throws Exception {
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"" + KC + "\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(json(post("/crew-schedules/crew-shifts/pinned"),
+                "{\"from\": \"2026-11-03\", \"to\": \"2026-11-03\", \"pinned\": true}"))
+                .andExpect(status().isOk());
+        String clear = "{\"lineId\": \"" + KC + "\", \"from\": \"2026-11-02\", \"to\": \"2026-11-04\"";
+
+        mvc.perform(json(post("/crew-schedules/crew-shifts/clear"), clear + ", \"includePinned\": false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cleared.removed").value(4))
+                .andExpect(jsonPath("$.cleared.keptPinned").value(2))
+                .andExpect(jsonPath("$.generation").doesNotExist())
+                // 30 days, minus the 2nd and the 4th; the pinned 3rd stays
+                .andExpect(jsonPath("$.lines[1].days", hasSize(28)))
+                .andExpect(jsonPath("$.lines[1].days[1].date").value("2026-11-03"));
+
+        mvc.perform(json(post("/crew-schedules/crew-shifts/clear"), "{\"includePinned\": true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cleared.removed").value(56))
+                .andExpect(jsonPath("$.cleared.keptPinned").value(0))
+                .andExpect(jsonPath("$.lines[1].days", hasSize(0)));
+
+        mvc.perform(json(post("/crew-schedules/crew-shifts/clear"), "{\"from\": \"2026-11-10\", \"to\": \"2026-11-09\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(json(post("/crew-schedules/crew-shifts/clear"), "{\"to\": \"2026-12-01\"}"))
+                .andExpect(status().isBadRequest());
+        // Other responses have no cleared
+        mvc.perform(get("/crew-schedules/rotation")).andExpect(jsonPath("$.cleared").doesNotExist());
+    }
+
+    @Test
+    void staticFilesAreRevalidatedByTheBrowser() throws Exception {
+        mvc.perform(get("/app.js"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", containsString("no-cache")))
+                .andExpect(header().exists("Last-Modified"));
     }
 
     @Test

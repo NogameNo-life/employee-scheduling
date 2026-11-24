@@ -22,6 +22,7 @@ import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateRequest
 import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateResult;
 import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
+import org.acme.employeescheduling.service.CrewScheduleEditor.ClearResult;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 import org.acme.employeescheduling.service.CrewScheduleEditor.SampleRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
@@ -171,6 +172,20 @@ public class CrewScheduleController {
                 schedule -> editor.setLineSample(schedule, lineId, request)));
     }
 
+    /**
+     * Removes the crew shifts of a line (null: all lines) in a date range, with their people changes; pinned ones
+     * only with {@code includePinned}. The response has {@code cleared}.
+     */
+    @PostMapping("/crew-shifts/clear")
+    public RotationResponse clearCrewShifts(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestBody ClearRequest request) {
+        ClearResult[] result = new ClearResult[1];
+        ScheduleVersion version = sessionService.edit(sessionId, schedule -> result[0] = editor.clearCrewShifts(schedule,
+                request.lineId(), request.from(), request.to(), request.includePinned()));
+        return toResponse(sessionId, version, null, result[0]);
+    }
+
     /** Pins or unpins every crew shift of a line (null: all lines) in a date range. */
     @PostMapping("/crew-shifts/pinned")
     public RotationResponse setPinnedInRange(
@@ -293,11 +308,16 @@ public class CrewScheduleController {
     }
 
     private RotationResponse toResponse(String sessionId, ScheduleVersion version, GenerateResult generation) {
+        return toResponse(sessionId, version, generation, null);
+    }
+
+    private RotationResponse toResponse(String sessionId, ScheduleVersion version, GenerateResult generation,
+            ClearResult cleared) {
         // Read the version under its lock: another request of the same session may change it
         synchronized (version.schedule()) {
             Rotation rotation = rosterService.toRotation(version.schedule());
             return new RotationResponse(sessionId, version.id(), rotation.month(), version.schedule().getShifts(),
-                    rotation.lines(), validator.validate(version.schedule()), generation);
+                    rotation.lines(), validator.validate(version.schedule()), generation, cleared);
         }
     }
 
@@ -305,10 +325,21 @@ public class CrewScheduleController {
      * @param shifts     times of the shift types (PLR_SM), e.g. for snapping a dragged crew shift
      * @param warnings   rest rule warnings, calculated for every response (nothing is blocked)
      * @param generation only after generating: what the generator did
+     * @param cleared    only after clearing: removed and kept pinned crew shifts
      */
     public record RotationResponse(String sessionId, String versionId, YearMonth month, List<ShiftTime> shifts,
             List<LineSchedule> lines, List<ScheduleWarning> warnings,
-            @JsonInclude(JsonInclude.Include.NON_NULL) GenerateResult generation) {
+            @JsonInclude(JsonInclude.Include.NON_NULL) GenerateResult generation,
+            @JsonInclude(JsonInclude.Include.NON_NULL) ClearResult cleared) {
+    }
+
+    /**
+     * @param lineId        null: all lines
+     * @param from          null: the 1st of the month
+     * @param to            null: the end of the month
+     * @param includePinned true: the pinned crew shifts are removed too
+     */
+    public record ClearRequest(String lineId, LocalDate from, LocalDate to, boolean includePinned) {
     }
 
     public record PinnedRequest(boolean pinned) {
