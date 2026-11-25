@@ -39,6 +39,8 @@ let shiftTimes = [
 let pendingGeneration = null;
 // The period of the generation that was just sent ({from, to}), for the result toast
 let generationPeriod = null;
+// Employees chosen in the export dialog (personnel numbers); everybody on every open and switch to "По сотрудникам"
+const exportSelection = new Set();
 // What the clear dialog is open for: {lineId, preview}
 let pendingClear = null;
 // The line of the open sample dialog
@@ -60,6 +62,31 @@ $(document).ready(function () {
   $("#bulkPinButton").click(() => bulkPin(true));
   $("#bulkUnpinButton").click(() => bulkPin(false));
   $("#clearButton").click(clearFromGenerateDialog);
+  $("#exportButton").click(openExportDialog);
+  $("input[name=exportWhat]").on("change", () => {
+    if (exportMode() === "employees") {
+      selectAllExportEmployees();
+    }
+    updateExportDialog();
+  });
+  // The search only filters the list, the selection stays
+  $("#exportSearch").on("input", renderExportEmployees);
+  $("#exportSelectAll").on("change", event => {
+    event.target.checked ? selectAllExportEmployees() : exportSelection.clear();
+    updateExportChecks();
+  });
+  $("#exportEmployeeList").on("change", ".export-employee-check", event => {
+    const id = parseInt(event.target.value);
+    event.target.checked ? exportSelection.add(id) : exportSelection.delete(id);
+    updateExportChecks();
+  });
+  $("#exportEmployeeList").on("change", ".export-crew-check", event => {
+    const crewId = parseInt($(event.target).data("crew"));
+    employeesOfCrew(crewId).forEach(employee => event.target.checked
+      ? exportSelection.add(employee.id) : exportSelection.delete(employee.id));
+    updateExportChecks();
+  });
+  $("#exportModalSave").click(saveExport);
   $("#clearIncludePinned").on("change", renderClearDialog);
   $("#clearModalSave").click(saveClear);
   $("#lineMenuClear").click(() => {
@@ -477,6 +504,7 @@ function employeeRowHtml(employee, today) {
   return `<tr>${label}${cells}</tr>`;
 }
 
+// TODO: the same rule is on the server (EmployeeDayStatus, used by the Excel export); use one source later.
 // What an employee does on a date: works (Д / Н, dashed = substitute), is absent (Б, ОТ, У, ПР), was taken off a
 // shift of the crew (crossed out), otherwise О (after a night shift) or В
 function employeeCell(employee, date) {
@@ -809,7 +837,11 @@ function renderEmployeeDrawer(employee) {
     .append($(`<div/>`)
       .append($(`<h2 class="drawer-title"/>`).text(employee.fullName))
       .append($(`<div class="drawer-subtitle"/>`)
-        .text(`Таб. № ${employee.id} · бригада ${crewName(crewOn(employee, monthEnd))}`))));
+        .text(`Таб. № ${employee.id} · бригада ${crewName(crewOn(employee, monthEnd))}`))))
+    .append($(`<button type="button" class="btn btn-sm btn-outline-dark mt-2"/>`)
+      .append($(`<span class="fas fa-file-excel me-1"/>`))
+      .append(document.createTextNode("Экспорт графика сотрудника"))
+      .click(() => downloadExport({employeeIds: [employee.id]})));
 
   const body = $("#drawerBody").empty();
   const totals = monthTotals(employee);
@@ -1058,6 +1090,166 @@ function sendGeneration(request, overwrite, preview) {
 // "с 05.11 по 15.11"
 function periodText(from, to) {
   return `с ${shortDate(from)} по ${shortDate(to)}`;
+}
+
+// ----- Excel export -----
+
+// "Экспорт": period (default: the shown month, reset on every open like the generator dialog), "По бригадам" (the
+// whole schedule) or "По сотрудникам" (chosen employees; all of them are chosen on every open). The drawer button
+// "Экспорт графика сотрудника" does not open this dialog: it downloads that one employee directly.
+function openExportDialog() {
+  if (lastSchedule == null) {
+    showSimpleError("Нет графика для выгрузки.");
+    return;
+  }
+  const month = JSJoda.YearMonth.parse(shownMonth);
+  const range = {min: month.atDay(1).toString(), max: month.atEndOfMonth().toString()};
+  $("#exportFrom").val(range.min).attr(range);
+  $("#exportTo").val(range.max).attr(range);
+  selectAllExportEmployees();
+  $("#exportSearch").val("");
+  renderExportEmployees();
+  updateExportDialog();
+  modal("exportModal").show();
+}
+
+function exportMode() {
+  return $("input[name=exportWhat]:checked").val();
+}
+
+function updateExportDialog() {
+  $("#exportEmployeesBox").prop("hidden", exportMode() !== "employees");
+  updateExportChecks();
+}
+
+function selectAllExportEmployees() {
+  exportSelection.clear();
+  lastSchedule.employees.forEach(employee => exportSelection.add(employee.id));
+}
+
+// Employees whose crew at the start of the month is this crew, in the order of the UI
+function employeesOfCrew(crewId) {
+  return lastSchedule.employees.filter(employee => employee.crew.id === crewId).sort(byPositionAndName);
+}
+
+// The list grouped by crew; the search matches the name or the personnel number. The selection is kept.
+function renderExportEmployees() {
+  const query = ($("#exportSearch").val() || "").trim().toLowerCase();
+  const matches = employee => query === "" || employee.fullName.toLowerCase().includes(query)
+    || String(employee.id).includes(query);
+  const groups = [...lastSchedule.crews].sort((a, b) => a.id - b.id).map(crew => {
+    const employees = employeesOfCrew(crew.id);
+    const shown = employees.filter(matches);
+    if (shown.length === 0) {
+      return "";
+    }
+    const line = crew.lineId == null ? null : index.linesById.get(crew.lineId);
+    const lineText = line == null ? (crew.lineId || "без линии") : line.name;
+    const rows = shown.map(employee => `<label class="export-employee">
+        <input type="checkbox" class="form-check-input export-employee-check" value="${employee.id}">
+        <span>${escapeHtml(employee.fullName)}</span><span class="muted">таб. № ${employee.id}</span></label>`).join("");
+    return `<div class="export-crew"><label class="export-crew-head">
+        <input type="checkbox" class="form-check-input export-crew-check" data-crew="${crew.id}"
+          aria-label="Вся бригада ${escapeHtml(crewName(crew))}">
+        <span>${escapeHtml(crewName(crew))}</span>
+        <span class="muted">${escapeHtml(lineText)} · ${employees.length} чел.</span></label>${rows}</div>`;
+  }).join("");
+  $("#exportEmployeeList").html(groups || `<p class="text-muted small m-2">Никого не найдено.</p>`);
+  updateExportChecks();
+}
+
+// Checkboxes, crew checkboxes (all / some = indeterminate), counter and the download button from the selection
+function updateExportChecks() {
+  const list = $("#exportEmployeeList");
+  list.find(".export-employee-check").each((i, el) => {
+    el.checked = exportSelection.has(parseInt(el.value));
+  });
+  list.find(".export-crew-check").each((i, el) => {
+    const employees = employeesOfCrew(parseInt($(el).data("crew")));
+    const chosen = employees.filter(employee => exportSelection.has(employee.id)).length;
+    el.checked = employees.length > 0 && chosen === employees.length;
+    el.indeterminate = chosen > 0 && chosen < employees.length;
+  });
+  const total = lastSchedule.employees.length;
+  const all = $("#exportSelectAll")[0];
+  all.checked = total > 0 && exportSelection.size === total;
+  all.indeterminate = exportSelection.size > 0 && exportSelection.size < total;
+  $("#exportCount").text(`Выбрано: ${exportSelection.size} из ${total}`);
+  $("#exportModalSave").prop("disabled", exportMode() === "employees" && exportSelection.size === 0);
+}
+
+function saveExport() {
+  const from = $("#exportFrom").val();
+  const to = $("#exportTo").val();
+  if (!from || !to || to < from) {
+    showSimpleError("Укажите период: дата «по» не раньше даты «с».");
+    return;
+  }
+  const params = {from: from, to: to};
+  if (exportMode() === "employees") {
+    params.employeeIds = [...exportSelection];
+  }
+  modal("exportModal").hide();
+  downloadExport(params);
+}
+
+// fetch (not a link): the request must have the X-Session-Id header. The file name comes from Content-Disposition.
+// params: {from?, to?, employeeIds?: [personnel numbers]}; nothing = the whole schedule of the month
+async function downloadExport(params) {
+  const button = $("#exportButton").prop("disabled", true);
+  const query = new URLSearchParams();
+  if (params.from) {
+    query.set("from", params.from);
+  }
+  if (params.to) {
+    query.set("to", params.to);
+  }
+  if (params.employeeIds && params.employeeIds.length > 0) {
+    query.set("employeeIds", params.employeeIds.join(","));
+  }
+  const url = "/crew-schedules/export.xlsx" + (query.toString() ? `?${query}` : "");
+  try {
+    const response = await fetch(url, {headers: {"X-Session-Id": sessionId}});
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        detail = (await response.json()).message || detail;
+      } catch (e) {
+        // Not JSON: keep the status text
+      }
+      showNotification("Не удалось выгрузить график в Excel.", detail);
+      return;
+    }
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = fileNameOf(response.headers.get("Content-Disposition")) || "crew-schedule.xlsx";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  } catch (e) {
+    showNotification("Не удалось выгрузить график в Excel.", String(e));
+  } finally {
+    button.prop("disabled", false);
+  }
+}
+
+// filename*=UTF-8''<url-encoded> (Cyrillic name), else filename="<ascii>"
+function fileNameOf(disposition) {
+  if (!disposition) {
+    return null;
+  }
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1].trim());
+    } catch (e) {
+      // Broken encoding: use the ASCII name
+    }
+  }
+  const ascii = /filename="([^"]+)"/i.exec(disposition);
+  return ascii ? ascii[1] : null;
 }
 
 // ----- Clear the crew shifts of a line / all lines in a period -----

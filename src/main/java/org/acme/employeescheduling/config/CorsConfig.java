@@ -23,6 +23,8 @@ public class CorsConfig implements WebMvcConfigurer {
         registry.addMapping("/**")
                 .allowedOrigins(origins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                // The Excel export: the frontend reads the file name from it
+                .exposedHeaders("Content-Disposition")
                 .allowCredentials(true);
     }
 }

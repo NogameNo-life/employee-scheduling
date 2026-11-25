@@ -220,6 +220,21 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 сотрудника не добавляется для пары смен, у которой уже есть предупреждение бригады. Считается в
 `CrewScheduleController.toResponse` для каждого ответа (`warnings`), не хранится. Граница с предыдущим месяцем — TODO.
 
+### Экспорт в Excel: `ScheduleExcelExporter`, `EmployeeDayStatus`
+
+`EmployeeDayStatus.of(schedule)` (чистый класс, один проход по сменам) отвечает, что сотрудник делает в дату: Д, Н,
+ДН, Б, ОТ, У, ПР, иначе О (ночь накануне) или В; плюс смены, часы, замены и снятия. 1-е число без прошлого месяца — В.
+То же правило пока есть в app.js (`employeeCell`, TODO: один источник).
+
+`ScheduleExcelExporter` (Apache POI `poi-ooxml`, версия в pom.xml) строит книгу из версии в памяти и пишет её в
+`OutputStream`, на диск ничего не пишется. `ExportRequest(lineId?, from?, to?, employeeIds?)` проверяется до записи
+(`Scope`: дни периода, линия, выбранные сотрудники). Листы «По линиям» (не для сотрудников), «По сотрудникам», «Смены»
+(только для сотрудников), «Нарушения» (если есть предупреждения), см. [rest-api.ru.md](rest-api.ru.md).
+`fileName` / `asciiFileName` дают имя файла. Внутри кэша стилей нельзя вызывать `computeIfAbsent` вложенно
+(`ConcurrentModificationException`): базовый стиль создаётся до лямбды. Стили кэшируются по виду (в книге не больше 64000 стилей). Контроллер вызывает
+его через `CrewScheduleSessionService.edit` (под блокировкой версии; неизвестная линия — 404) и отдаёт байты с
+`Content-Disposition` (`filename` ASCII + `filename*` UTF-8).
+
 `LineSchedule` собирает смены по линиям и дням: дневная и ночная смена дня — `Pair<CrewShift, CrewShift>`
 (commons-lang3) в `LineSchedule.LineDay`.
 
@@ -244,6 +259,7 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 | PUT | `/crew-schedules/lines/{lineId}/sample` | `{from?, dayCrewIds}` | Очередь бригад: закреплённые дневные смены 4 дней |
 | POST | `/crew-schedules/crew-shifts/pinned` | `{lineId?, from?, to?, pinned}` | Закрепить / открепить период |
 | POST | `/crew-schedules/crew-shifts/clear` | `{lineId?, from?, to?, includePinned}` | Удалить смены периода (`cleared`: `removed`, `keptPinned`) |
+| GET | `/crew-schedules/export.xlsx?from=&to=&employeeIds=&lineId=` | | График в Excel (`.xlsx`) за период: весь, выбранные сотрудники или одна линия |
 | POST | `/crew-schedules/crew-shifts` | `{date, type, lineId, crewId}` | Поставить бригаду на смену |
 | PUT | `/crew-schedules/crew-shifts/{id}` | `{date, type, lineId, crewId}` | Перенести смену или поменять бригаду |
 | DELETE | `/crew-schedules/crew-shifts/{id}` | | Удалить смену |
@@ -299,6 +315,8 @@ mvn test
 | `CrewScheduleEditorTest` | Правила редактора |
 | `CrewRotationGeneratorTest` | Порядок по умолчанию, очереди (своя, с чужой бригадой, из 3 бригад), опорные смены, overwrite, обмен 10-го, конфликт фаз, предпросмотр, `pin`, массовое открепление, месяцы 28/30/31 дней, занятая бригада |
 | `ScheduleValidatorTest` | Правило отдыха: бригады, две линии, замена, отсутствие, время из `PLR_SM` |
+| `EmployeeDayStatusTest` | Д, Н, ДН, О, В, отсутствия, замена и снятие со смены, часы |
+| `ScheduleExcelExporterTest` | Книга читается обратно через POI: листы, печать, клетки Д/Н, О, Б, замена, часы, пустое место, дефицит, одна линия, 28/30/31 день, период (столбцы, итоги, 400), сотрудники («Смены», отсутствия, итоги, нарушения, 404), имена файлов |
 | `CrewScheduleFactoryTest` | Создание и копирование версий |
 | `CrewScheduleRepositoryTest` | Хранение версий |
 | `CrewRosterServiceTest` | График по линиям, список бригад |

@@ -587,3 +587,11 @@ body {
 }
 .line-menu button:hover, .line-menu button:focus-visible { background: var(--deficit-bg); outline: none; }
 .line-head .line-name { padding-right: 22px; }
+
+/* Export dialog: employees grouped by crew */
+.export-employee-list { max-height: 340px; overflow-y: auto; border: 1px solid var(--c-border); border-radius: var(--r-md); }
+.export-crew + .export-crew { border-top: 1px solid var(--c-border); }
+.export-crew-head { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: var(--c-canvas); font-weight: 600; margin: 0; cursor: pointer; }
+.export-employee { display: flex; gap: 8px; align-items: center; padding: 3px 10px 3px 30px; margin: 0; cursor: pointer; font-size: 14px; }
+.export-employee:hover { background: var(--c-canvas); }
+.export-crew-head .muted, .export-employee .muted { margin-left: auto; color: var(--c-text-subtle); font-weight: 400; font-size: 12px; }

@@ -56,6 +56,9 @@
         <span class="fas fa-save me-1"></span>Сохранить
       </button>
     </span>
+    <button type="button" class="btn btn-outline-dark" id="exportButton">
+      <span class="fas fa-file-excel me-1"></span>Экспорт
+    </button>
     <a href="/instruction.html" target="_blank" rel="noopener" class="btn btn-outline-dark" id="instructionButton">
       <span class="fas fa-question-circle me-1"></span>Инструкция
     </a>
@@ -193,6 +196,59 @@
         <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
         <button type="button" class="btn btn-outline-dark" id="overwriteModalFill">Только дополнить пустые</button>
         <button type="button" class="btn btn-danger" id="overwriteModalReplace">Перезаписать незакреплённые</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Excel export: period, whole schedule or chosen employees -->
+<div class="modal fade" id="exportModal" tabindex="-1" aria-labelledby="exportModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="exportModalTitle">Экспорт в Excel</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2 mb-3">
+          <div class="col">
+            <label for="exportFrom" class="form-label">С даты</label>
+            <input id="exportFrom" type="date" class="form-control">
+          </div>
+          <div class="col">
+            <label for="exportTo" class="form-label">По дату</label>
+            <input id="exportTo" type="date" class="form-control">
+          </div>
+        </div>
+        <fieldset class="mb-2">
+          <legend class="form-label fs-6 mb-1">Что выгрузить</legend>
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="exportWhat" id="exportWhatAll" value="all" checked>
+            <label class="form-check-label" for="exportWhatAll">По бригадам</label>
+          </div>
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="radio" name="exportWhat" id="exportWhatEmployees" value="employees">
+            <label class="form-check-label" for="exportWhatEmployees">По сотрудникам</label>
+          </div>
+        </fieldset>
+        <div id="exportEmployeesBox" hidden>
+          <div class="d-flex gap-2 align-items-center mb-2">
+            <input id="exportSearch" type="search" class="form-control form-control-sm"
+                   placeholder="Поиск: ФИО или табельный номер" aria-label="Поиск сотрудника">
+            <div class="form-check text-nowrap mb-0">
+              <input class="form-check-input" type="checkbox" id="exportSelectAll">
+              <label class="form-check-label small" for="exportSelectAll">Отметить всех</label>
+            </div>
+            <span class="text-nowrap small" id="exportCount" aria-live="polite">Выбрано: 0 из 0</span>
+          </div>
+          <div class="export-employee-list" id="exportEmployeeList"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-dark" id="exportModalSave">
+          <span class="fas fa-download me-1"></span>Скачать
+        </button>
       </div>
     </div>
   </div>

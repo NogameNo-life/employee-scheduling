@@ -53,6 +53,13 @@
             <artifactId>commons-lang3</artifactId>
         </dependency>
 
+        <!-- Excel export (.xlsx); Spring Boot does not manage its version -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.5.1</version>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
