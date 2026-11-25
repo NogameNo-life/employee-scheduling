@@ -22,8 +22,11 @@ public class Crew {
 
     private String name;
 
-    /** People needed in this crew per shift (PLR_BR.NTB). */
-    private int staffCount;
+    /**
+     * People needed in this crew per shift (PLR_BR.NTB); null = not set (NTB is NULL, 0 or negative).
+     * A crew without it never has a deficit.
+     */
+    private Integer staffCount;
 
     /**
      * The crew's own line: PLR_BR.KC (= {@link Line#getId()}), trimmed; null if not set. Only information:

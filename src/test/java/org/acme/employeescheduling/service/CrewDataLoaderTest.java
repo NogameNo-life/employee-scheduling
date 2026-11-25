@@ -17,6 +17,8 @@ import org.acme.employeescheduling.entity.plr.PlrTb;
 import org.acme.employeescheduling.repository.plr.EmployeeCrewRepository;
 import org.acme.employeescheduling.entity.tabu.BdCard;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class CrewDataLoaderTest {
 
@@ -115,15 +117,37 @@ class CrewDataLoaderTest {
     }
 
     @Test
-    void crewWithoutNtbNeedsNoPeople() {
+    void crewWithoutNtbHasNoStaffCount() {
         PlrBr row = new PlrBr();
         row.crewId = 5;
 
         Crew crew = CrewDataLoader.toCrew(row);
 
         assertThat(crew.getName()).isEqualTo("5");
-        assertThat(crew.getStaffCount()).isZero();
+        assertThat(crew.getStaffCount()).isNull();
         assertThat(crew.getLineId()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource(nullValues = "null", value = {"null, null", "0, null", "-1, null", "5, 5"})
+    void ntbNullZeroOrNegativeIsNotSet(Integer ntb, Integer staffCount) {
+        PlrBr row = new PlrBr();
+        row.crewId = 5;
+        row.staffCount = ntb;
+
+        assertThat(CrewDataLoader.toCrew(row).getStaffCount()).isEqualTo(staffCount);
+    }
+
+    @Test
+    void crewsWithoutNtbAreListedInOneWarning() {
+        Crew withNtb = new Crew(1, "Линия1/1");
+        withNtb.setStaffCount(5);
+        Crew withoutNtb = new Crew(2, "Линия1/2");
+        Crew alsoWithout = new Crew(3, "Линия1/3");
+
+        assertThat(CrewDataLoader.withoutStaffCount(List.of(withNtb, withoutNtb, alsoWithout)))
+                .isEqualTo("2 Линия1/2, 3 Линия1/3");
+        assertThat(CrewDataLoader.withoutStaffCount(List.of(withNtb))).isEmpty();
     }
 
     private static BdCard row(int employeeId, String fullName) {
