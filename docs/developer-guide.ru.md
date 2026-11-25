@@ -229,7 +229,7 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 
 Все пути начинаются с `/crew-schedules` и работают с версией вызывающего (`X-Session-Id`).
 Изменения смен возвращают весь график по линиям (`RotationResponse`: `sessionId`, `versionId`, `month`, `shifts`,
-`lines`, `warnings`; после генерации ещё `generation`).
+`lines`, `warnings`; после генерации ещё `generation`, после очистки — `cleared`).
 Примеры запросов и ответов: [rest-api.ru.md](rest-api.ru.md).
 
 | Метод | Путь | Тело | Назначение |
@@ -243,6 +243,7 @@ Id смены бригады — `дата-ТИП-KC` (например `2026-11
 | GET | `/crew-schedules/generate/preview?lineId=&from=&to=` | | Закреплённые, незакреплённые и пустые места периода по линиям и всего |
 | PUT | `/crew-schedules/lines/{lineId}/sample` | `{from?, dayCrewIds}` | Очередь бригад: закреплённые дневные смены 4 дней |
 | POST | `/crew-schedules/crew-shifts/pinned` | `{lineId?, from?, to?, pinned}` | Закрепить / открепить период |
+| POST | `/crew-schedules/crew-shifts/clear` | `{lineId?, from?, to?, includePinned}` | Удалить смены периода (`cleared`: `removed`, `keptPinned`) |
 | POST | `/crew-schedules/crew-shifts` | `{date, type, lineId, crewId}` | Поставить бригаду на смену |
 | PUT | `/crew-schedules/crew-shifts/{id}` | `{date, type, lineId, crewId}` | Перенести смену или поменять бригаду |
 | DELETE | `/crew-schedules/crew-shifts/{id}` | | Удалить смену |

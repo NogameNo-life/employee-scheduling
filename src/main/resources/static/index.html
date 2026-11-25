@@ -44,9 +44,6 @@
         <span class="fas fa-users me-1"></span>По сотрудникам
       </button>
     </fieldset>
-    <button type="button" id="refreshButton" class="btn btn-outline-dark" title="Обновить" aria-label="Обновить">
-      <span class="fas fa-sync-alt"></span>
-    </button>
     <button type="button" id="newMonthButton" class="btn btn-outline-dark">
       <span class="fas fa-calendar-plus me-1"></span>Новый пустой месяц
     </button>
@@ -148,7 +145,7 @@
         <h6 class="mb-1">Очередь бригад по линиям</h6>
         <ul class="plain-list generate-lines" id="generateLineList"></ul>
         <hr>
-        <h6 class="mb-2">Закрепление за период</h6>
+        <h6 class="mb-2">Закрепление и очистка за период</h6>
         <div class="row g-2 align-items-end">
           <div class="col">
             <label for="bulkPinFrom" class="form-label small mb-0">с</label>
@@ -164,6 +161,9 @@
             </button>
             <button type="button" class="btn btn-sm btn-outline-dark" id="bulkUnpinButton">
               <span class="fas fa-lock-open me-1"></span>Открепить всё
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="clearButton">
+              <span class="fas fa-eraser me-1"></span>Очистить
             </button>
           </div>
         </div>
@@ -196,6 +196,39 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- Clear the crew shifts of a line / all lines in a period -->
+<div class="modal fade" id="clearModal" tabindex="-1" aria-labelledby="clearModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="clearModalTitle">Очистить смены</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <p id="clearModalText" class="mb-2"></p>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="clearIncludePinned">
+          <label class="form-check-label" for="clearIncludePinned" id="clearIncludePinnedLabel">Включая закреплённые</label>
+        </div>
+        <p id="clearModalNote" class="small text-danger mt-2 mb-0" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-danger" id="clearModalSave">
+          <span class="fas fa-eraser me-1"></span>Удалить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Menu of a line row ("По линиям"), placed under its ⋯ button -->
+<div id="lineMenu" class="line-menu" role="menu" hidden>
+  <button type="button" role="menuitem" id="lineMenuClear">
+    <span class="fas fa-eraser me-2"></span>Очистить линию за месяц
+  </button>
 </div>
 
 <!-- Sample of one line: DAY crews of 4 days in a row -->

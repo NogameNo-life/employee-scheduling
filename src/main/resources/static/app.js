@@ -39,6 +39,8 @@ let shiftTimes = [
 let pendingGeneration = null;
 // The period of the generation that was just sent ({from, to}), for the result toast
 let generationPeriod = null;
+// What the clear dialog is open for: {lineId, preview}
+let pendingClear = null;
 // The line of the open sample dialog
 let sampleLineId = null;
 // Lookups, built again for every version (buildIndex)
@@ -57,11 +59,30 @@ $(document).ready(function () {
   $("#overwriteModalFill").click(() => answerOverwrite(false));
   $("#bulkPinButton").click(() => bulkPin(true));
   $("#bulkUnpinButton").click(() => bulkPin(false));
+  $("#clearButton").click(clearFromGenerateDialog);
+  $("#clearIncludePinned").on("change", renderClearDialog);
+  $("#clearModalSave").click(saveClear);
+  $("#lineMenuClear").click(() => {
+    const lineId = $("#lineMenu").data("line");
+    closeLineMenu();
+    openClearDialog(lineId, null, null);
+  });
+  // The line menu closes on a click elsewhere, Escape and scrolling
+  $(document).on("click", event => {
+    if (!$(event.target).closest("#lineMenu, .line-menu-button").length) {
+      closeLineMenu();
+    }
+  });
+  $(document).on("keydown", event => {
+    if (event.key === "Escape") {
+      closeLineMenu();
+    }
+  });
+  $(window).on("resize", closeLineMenu);
   $("#generateLineList").on("click", ".sample-link", event => openSampleDialog(String($(event.currentTarget).data("line"))));
   $("#sampleFrom").on("change", renderSampleDays);
   $("#sampleSave").click(() => saveSample(false));
   $("#sampleSaveFill").click(() => saveSample(true));
-  $("#refreshButton").click(refreshSchedule);
   $("#viewLinesButton").click(() => setView("lines"));
   $("#viewEmployeesButton").click(() => setView("employees"));
   $("#warningChip").click(() => scrollToFirst("warning"));
@@ -78,6 +99,8 @@ $(document).ready(function () {
     const card = $(event.currentTarget);
     openCrewPicker({date: card.data("date"), type: card.data("type"), lineId: String(card.data("line"))});
   });
+  grid.on("click", ".line-menu-button", event => toggleLineMenu($(event.currentTarget)));
+  grid.on("scroll", closeLineMenu);
   grid.on("click", ".emp-label", event => openDrawer("employee", $(event.currentTarget).data("employee")));
   grid.on("click", ".emp-cell", event => {
     const cell = $(event.currentTarget);
@@ -229,6 +252,7 @@ function isDeficit(shift) {
 // ---------- Drawing ----------
 
 function renderAll() {
+  closeLineMenu();
   buildIndex();
   renderHeader();
   renderLegend();
@@ -306,7 +330,9 @@ function linesGridHtml() {
     const cells = index.days.map(date => `<td class="line-cell${date === today ? " today" : ""}">`
       + shiftCardHtml(line, date, "DAY") + shiftCardHtml(line, date, "NIGHT") + `</td>`).join("");
     const code = line.name === line.id ? "" : `<div class="line-code">${escapeHtml(line.id)}</div>`;
-    return `<tr><th class="sticky-col line-head" scope="row"><div class="line-name">${escapeHtml(line.name)}</div>${code}</th>${cells}</tr>`;
+    const menu = `<button type="button" class="line-menu-button" data-line="${escapeHtml(line.id)}" aria-haspopup="menu"
+      aria-label="Меню линии ${escapeHtml(line.name)}" title="Меню линии"><span class="fas fa-ellipsis-h"></span></button>`;
+    return `<tr><th class="sticky-col line-head" scope="row">${menu}<div class="line-name">${escapeHtml(line.name)}</div>${code}</th>${cells}</tr>`;
   }).join("");
   return `<table class="grid-table"><thead><tr><th class="sticky-col line-head" scope="col">Линия</th>${head}</tr></thead>`
     + `<tbody>${rows}</tbody></table>`;
@@ -1032,6 +1058,110 @@ function sendGeneration(request, overwrite, preview) {
 // "с 05.11 по 15.11"
 function periodText(from, to) {
   return `с ${shortDate(from)} по ${shortDate(to)}`;
+}
+
+// ----- Clear the crew shifts of a line / all lines in a period -----
+
+// The line menu (⋯) of a row in "По линиям": a fixed box under the button, so the scrolling grid does not cut it
+function toggleLineMenu(button) {
+  const menu = $("#lineMenu");
+  const lineId = String(button.data("line"));
+  if (!menu.prop("hidden") && menu.data("line") === lineId) {
+    closeLineMenu();
+    return;
+  }
+  const rect = button[0].getBoundingClientRect();
+  menu.data("line", lineId).prop("hidden", false).css({top: rect.bottom + 4, left: rect.left});
+  button.attr("aria-expanded", "true");
+  menu.find("button").first().trigger("focus");
+}
+
+function closeLineMenu() {
+  $("#lineMenu").prop("hidden", true);
+  $(".line-menu-button[aria-expanded]").removeAttr("aria-expanded");
+}
+
+// "Очистить" of the generator dialog: its line and the dates next to the button
+function clearFromGenerateDialog() {
+  const from = $("#bulkPinFrom").val();
+  const to = $("#bulkPinTo").val();
+  if (!from || !to || to < from) {
+    showSimpleError("Укажите период: первый и последний день.");
+    return;
+  }
+  openClearDialog($("#generateLine").val() || null, from, to);
+}
+
+// The counts come from the generator preview (pinned / unpinned in the period)
+function openClearDialog(lineId, from, to) {
+  const params = new URLSearchParams();
+  if (lineId) {
+    params.set("lineId", lineId);
+  }
+  if (from) {
+    params.set("from", from);
+  }
+  if (to) {
+    params.set("to", to);
+  }
+  $.getJSON(`/crew-schedules/generate/preview?${params}`, preview => {
+    pendingClear = {lineId: lineId, preview: preview};
+    $("#clearIncludePinned").prop("checked", false);
+    renderClearDialog();
+    modal("generateModal").hide();
+    modal("clearModal").show();
+  }).fail(xhr => showError("Не удалось посчитать смены периода.", xhr));
+}
+
+function renderClearDialog() {
+  if (pendingClear == null) {
+    return;
+  }
+  const preview = pendingClear.preview;
+  const pinned = preview.total.pinned;
+  const unpinned = preview.total.unpinned;
+  const includePinned = $("#clearIncludePinned").is(":checked");
+  const count = unpinned + (includePinned ? pinned : 0);
+  const line = pendingClear.lineId == null ? null : index.linesById.get(pendingClear.lineId);
+  const where = pendingClear.lineId == null ? "всех линий" : `линии ${line == null ? pendingClear.lineId : line.name}`;
+  const period = periodText(preview.from, preview.to);
+  $("#clearIncludePinnedLabel").text(`Включая закреплённые (${pinned})`);
+  $("#clearIncludePinned").prop("disabled", pinned === 0);
+  let note = null;
+  if (pinned + unpinned === 0) {
+    $("#clearModalText").text(`У ${where} нет смен в период ${period}.`);
+  } else if (count === 0) {
+    $("#clearModalText").text(`У ${where} в период ${period} только закреплённые смены (${pinned}).`);
+    note = "Все смены периода закреплены — отметьте «Включая закреплённые» или открепите их.";
+  } else {
+    $("#clearModalText").text(`Удалить ${count} ${plural(count, "смену", "смены", "смен")} ${where} ${period}? `
+      + "Замены и снятия в этих сменах тоже удалятся.");
+  }
+  $("#clearModalNote").text(note || "").prop("hidden", note == null);
+  $("#clearModalSave").prop("disabled", count === 0);
+}
+
+function saveClear() {
+  const pending = pendingClear;
+  if (pending == null) {
+    return;
+  }
+  const body = {
+    lineId: pending.lineId,
+    from: pending.preview.from,
+    to: pending.preview.to,
+    includePinned: $("#clearIncludePinned").is(":checked")
+  };
+  send("POST", "/crew-schedules/crew-shifts/clear", body).done(roster => {
+    pendingClear = null;
+    modal("clearModal").hide();
+    onRosterChanged(roster);
+    const cleared = roster.cleared;
+    const removed = `${plural(cleared.removed, "Удалена", "Удалено", "Удалено")} ${cleared.removed} `
+      + plural(cleared.removed, "смена", "смены", "смен");
+    const kept = cleared.keptPinned === 0 ? "" : `, закреплённых оставлено: ${cleared.keptPinned}`;
+    showInfo("Очистка", `${removed}${kept}.`);
+  }).fail(xhr => showError("Не удалось очистить смены.", xhr));
 }
 
 // "Закрепить всё" / "Открепить всё" for the line chosen in the dialog (or all lines) and a date range

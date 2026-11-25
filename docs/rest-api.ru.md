@@ -116,7 +116,8 @@ Swagger UI: http://localhost:8080/swagger-ui.html.
 При 12-часовых сменах предупреждение дают: день → ночь той же даты, ночь → день следующего утра.
 День → день следующей даты (12 ч отдыха) — нет.
 
-Поле `generation` есть только в ответах генератора (`POST /generate`, `POST /init?generate=true`), см. ниже.
+Поле `generation` есть только в ответах генератора (`POST /generate`, `POST /init?generate=true`), поле `cleared` —
+только в ответе очистки (`POST /crew-shifts/clear`), см. ниже.
 
 `shifts` — время смен версии из `PLR_SM` (`ShiftTime`): `start` / `end` — время начала и конца (`end` не позже
 `start` — конец на следующий день), `sng` — коды `PLR_SM.SNG` как в таблице, `hours` — длина смены.
@@ -334,6 +335,35 @@ Content-Type: application/json
 
 `lineId: null` — все линии; `from: null` — 1-е число; `to: null` — конец месяца. Ответ:
 [`RotationResponse`](#ответ-rotationresponse). 400 — дата не в месяце версии или `from` позже `to`; 404 — нет линии.
+
+### POST `/crew-schedules/crew-shifts/clear` — очистить смены линии или всех линий за период
+
+```http
+POST /crew-schedules/crew-shifts/clear
+X-Session-Id: a1b2c3
+Content-Type: application/json
+
+{ "lineId": "БерЦГС1", "from": "2026-11-05", "to": "2026-11-15", "includePinned": false }
+```
+
+Удаляет смены бригад линии в периоде `from`..`to` (обе даты включительно) вместе с изменениями людей этих смен
+(снятые со смены и замены). `lineId: null` — все линии; `from: null` — 1-е число; `to: null` — конец месяца.
+Закреплённые смены удаляются только при `includePinned: true`, иначе остаются. Смены вне периода не меняются.
+Сколько смен в периоде (закреплённых и нет), заранее показывает
+[`GET /generate/preview`](#get-crew-schedulesgeneratepreviewlineidfromto--что-есть-в-периоде).
+
+Ответ: [`RotationResponse`](#ответ-rotationresponse) и `cleared`:
+
+```json
+"cleared": { "removed": 10, "keptPinned": 12 }
+```
+
+`removed` — сколько смен удалено, `keptPinned` — сколько закреплённых смен периода осталось.
+
+| Код | Когда (ничего не меняется) |
+| --- | --- |
+| 400 | Дата не в месяце версии; `to` раньше `from` |
+| 404 | Нет такой линии |
 
 ## Генератор графика бригад
 
