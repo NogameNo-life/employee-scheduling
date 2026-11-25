@@ -12,6 +12,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -867,10 +868,12 @@ public class ScheduleExcelExporter {
             });
         }
 
+        /**
+         * "rrggbb" -> color. The colors are constants of this class (checked by the tests); a wrong one is a
+         * programming error, and {@link HexFormat#parseHex} then throws an {@link IllegalArgumentException}.
+         */
         private static XSSFColor color(String hex) {
-            return new XSSFColor(new byte[] { (byte) Integer.parseInt(hex.substring(0, 2), 16),
-                    (byte) Integer.parseInt(hex.substring(2, 4), 16),
-                    (byte) Integer.parseInt(hex.substring(4, 6), 16) }, null);
+            return new XSSFColor(HexFormat.of().parseHex(hex), null);
         }
     }
 }
