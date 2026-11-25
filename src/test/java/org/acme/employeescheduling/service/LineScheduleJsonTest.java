@@ -40,9 +40,9 @@ class LineScheduleJsonTest {
                 {"line":{"id":"БерЦГС1","krc":"170610060000","name":"Line 1"},"days":[{"date":"2026-11-01",\
                 "dayShift":{"id":"d","date":"2026-11-01","type":"DAY",\
                 "line":{"id":"БерЦГС1","krc":"170610060000","name":"Line 1"},\
-                "crew":{"id":1,"name":"Cr1","staffCount":0,"lineId":"БерЦГС1"},"pinned":true,\
+                "crew":{"id":1,"name":"Cr1","staffCount":null,"lineId":"БерЦГС1"},"pinned":true,\
                 "employeeIds":[],"absentEmployeeIds":[],"extraEmployeeIds":[],"unavailableEmployeeIds":[],\
-                "staffCount":0,"hours":12.0,\
+                "staffCount":null,"hours":12.0,\
                 "start":"2026-11-01T08:00:00","end":"2026-11-01T20:00:00"},"nightShift":null}]}"""));
     }
 

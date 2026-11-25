@@ -284,7 +284,7 @@ public class ScheduleExcelExporter {
                     }
                     count++;
                     int people = shift.getEmployees().size();
-                    boolean deficit = people < shift.getStaffCount();
+                    boolean deficit = shift.isDeficit();
                     Cell cell = text(row, LINES_FIRST_DAY_COLUMN + i,
                             crewName(shift.getCrew()) + (deficit ? DEFICIT_MARK : ""),
                             styles.get(deficit ? DEFICIT_AMBER : weekendOr(date, WHITE), TEXT, deficit,

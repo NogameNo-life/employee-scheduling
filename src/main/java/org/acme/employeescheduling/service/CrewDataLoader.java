@@ -4,9 +4,11 @@ import static java.util.stream.Collectors.toMap;
 
 import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 
@@ -52,6 +54,7 @@ public class CrewDataLoader {
         Map<Integer, Crew> crewsById = crewRows.stream()
                 .filter(r -> r.crewId != null)
                 .collect(toMap(r -> r.crewId, CrewDataLoader::toCrew, (a, b) -> a, LinkedHashMap::new));
+        warnAboutMissingStaffCount(department, crewsById.values());
 
         // 2) Employee -> crew of the month, 3) names
         List<Employee> employees = toEmployees(department, findCrewRows(department, month), crewsById,
@@ -60,12 +63,32 @@ public class CrewDataLoader {
         return new CrewData(List.copyOf(crewsById.values()), employees);
     }
 
-    /** The crew of a PLR_BR row: name and line (KC) are trimmed (CHAR columns), no NTB means 0 people. */
+    /**
+     * The crew of a PLR_BR row: name and line (KC) are trimmed (CHAR columns). NTB NULL, 0 or negative means
+     * "not set": staffCount null.
+     */
     static Crew toCrew(PlrBr row) {
         Crew crew = new Crew(row.crewId, row.crewName == null ? String.valueOf(row.crewId) : row.crewName.trim());
-        crew.setStaffCount(row.staffCount == null ? 0 : Math.max(row.staffCount, 0));
+        crew.setStaffCount(row.staffCount == null || row.staffCount <= 0 ? null : row.staffCount);
         crew.setLineId(row.lineId == null || row.lineId.isBlank() ? null : row.lineId.trim());
         return crew;
+    }
+
+    /** One warning per department with the crews that have no NTB (id and name), so it does not flood the log. */
+    static void warnAboutMissingStaffCount(String department, Collection<Crew> crews) {
+        String withoutNtb = withoutStaffCount(crews);
+        if (!withoutNtb.isEmpty()) {
+            LOGGER.warn("Department {}: PLR_BR.NTB is not set (NULL or 0) for crews {}; their shifts have no"
+                    + " deficit.", department, withoutNtb);
+        }
+    }
+
+    /** "id name, id name" of the crews without staffCount; empty if every crew has it. */
+    static String withoutStaffCount(Collection<Crew> crews) {
+        return crews.stream()
+                .filter(crew -> crew.getStaffCount() == null)
+                .map(crew -> crew.getId() + " " + crew.getName())
+                .collect(Collectors.joining(", "));
     }
 
     /** GGMM of a month: yyyyMM as a number, e.g. 202611. */

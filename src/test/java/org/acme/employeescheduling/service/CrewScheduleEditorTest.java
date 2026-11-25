@@ -74,6 +74,23 @@ class CrewScheduleEditorTest {
     }
 
     @Test
+    void deficitOnlyWithAStaffCount() {
+        CrewShift crewShift = editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
+        // Crew 1 needs 2 and has 1 (Anna)
+        assertThat(crewShift.isDeficit()).isTrue();
+
+        crew(1).setStaffCount(1);
+        assertThat(crewShift.isDeficit()).isFalse();
+
+        // Not set (PLR_BR.NTB NULL): never a deficit, even with nobody in the shift
+        crew(1).setStaffCount(null);
+        editor.removeEmployeeFromShift(schedule, crewShift.getId(), 100);
+        assertThat(crewShift.getEmployees()).isEmpty();
+        assertThat(crewShift.getStaffCount()).isNull();
+        assertThat(crewShift.isDeficit()).isFalse();
+    }
+
+    @Test
     void lineShiftHasAtMostOneCrew() {
         editor.addCrewShift(schedule, request(DAY1, ShiftType.DAY, "L1", 1));
 

@@ -107,7 +107,10 @@ $(document).ready(function () {
   });
   $(window).on("resize", closeLineMenu);
   $("#generateLineList").on("click", ".sample-link", event => openSampleDialog(String($(event.currentTarget).data("line"))));
-  $("#sampleFrom").on("change", renderSampleDays);
+  $("#sampleFrom").on("change", () => {
+    updateSampleToMin();
+    renderSampleDays();
+  });
   $("#sampleSave").click(() => saveSample(false));
   $("#sampleSaveFill").click(() => saveSample(true));
   $("#viewLinesButton").click(() => setView("lines"));
@@ -272,8 +275,18 @@ function slotKey(lineId, date, type) {
   return `${lineId}|${date}|${type}`;
 }
 
+// staffCount null = the crew has no PLR_BR.NTB: no deficit then
+function hasStaffCount(shift) {
+  return shift.staffCount != null;
+}
+
 function isDeficit(shift) {
-  return shift.employeeIds.length < shift.staffCount;
+  return hasStaffCount(shift) && shift.employeeIds.length < shift.staffCount;
+}
+
+// "10/12", or only "10" when the crew has no norm
+function peopleText(shift, separator = "/") {
+  return hasStaffCount(shift) ? `${shift.employeeIds.length}${separator}${shift.staffCount}` : `${shift.employeeIds.length}`;
 }
 
 // ---------- Drawing ----------
@@ -346,11 +359,26 @@ function linesGridHtml() {
   const head = index.days.map(date => {
     const shifts = index.shiftsByDate.get(date) || [];
     const people = shifts.reduce((sum, shift) => sum + shift.employeeIds.length, 0);
-    const needed = shifts.reduce((sum, shift) => sum + shift.staffCount, 0);
-    const peopleText = shifts.length === 0 ? "—" : `${people} / ${needed}`;
+    // The norm counts only the shifts of crews that have one (PLR_BR.NTB)
+    const withNorm = shifts.filter(hasStaffCount);
+    const needed = withNorm.reduce((sum, shift) => sum + shift.staffCount, 0);
+    const peopleWithNorm = withNorm.reduce((sum, shift) => sum + shift.employeeIds.length, 0);
+    const short = peopleWithNorm < needed;
+    let text = "—";
+    let title = "";
+    if (shifts.length > 0 && withNorm.length === 0) {
+      text = `${people}`;
+      title = "Людей во всех сменах дня (норма бригад не задана в PLR_BR.NTB)";
+    } else if (withNorm.length === shifts.length) {
+      text = `${people} / ${needed}`;
+      title = "Людей во всех сменах дня / нужно";
+    } else if (shifts.length > 0) {
+      text = `${peopleWithNorm} / ${needed}`;
+      title = `Людей / нужно в сменах бригад с нормой (PLR_BR.NTB). Всего людей в сменах дня: ${people}`;
+    }
     return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col">
       <span class="day-number">${dayNumber(date)}</span><span class="day-week">${weekday(date)}</span>
-      <span class="day-people${people < needed ? " short" : ""}" title="Людей во всех сменах дня / нужно">${peopleText}</span>
+      <span class="day-people${short ? " short" : ""}" title="${title}">${text}</span>
     </th>`;
   }).join("");
   const rows = index.lines.map(line => {
@@ -385,7 +413,8 @@ function shiftCardHtml(line, date, type) {
     classes.push("pinned");
   }
   const tooltip = [`${crewName(shift.crew)}, ${shiftLabel(type)}, ${formatDate(date)}`,
-    `Людей: ${shift.employeeIds.length} из ${shift.staffCount}`,
+    hasStaffCount(shift) ? `Людей: ${shift.employeeIds.length} из ${shift.staffCount}`
+      : `Людей: ${shift.employeeIds.length} (норма бригады не задана в PLR_BR.NTB)`,
     ...(shift.pinned ? ["Закреплена"] : []),
     ...warnings.map(warning => warning.message)].join("\n");
   return `<button type="button" class="${classes.join(" ")}" data-id="${escapeHtml(shift.id)}"
@@ -393,7 +422,7 @@ function shiftCardHtml(line, date, type) {
     <span class="dot"></span><span class="crew">${escapeHtml(crewName(shift.crew))}</span><span class="time">${timeOf(type).start}</span>
     ${shift.pinned ? `<span class="pin fas fa-lock" aria-label="Закреплена"></span>` : ""}
     <span class="meta"><span>${type === "DAY" ? "Дневная" : "Ночная"}</span>
-      <span class="people"><span class="fas fa-user-friends me-1"></span>${shift.employeeIds.length}/${shift.staffCount}</span></span>
+      <span class="people"><span class="fas fa-user-friends me-1"></span>${peopleText(shift)}</span></span>
   </button>`;
 }
 
@@ -681,7 +710,8 @@ function renderShiftDrawer(shift) {
   const body = $("#drawerBody").empty();
   const deficit = isDeficit(shift);
   body.append($(`<div class="drawer-section"/>`).append($(`<div class="stat-boxes"/>`)
-    .append(statBox("Людей", `${shift.employeeIds.length} / ${shift.staffCount}`, deficit ? "не хватает" : "", deficit))
+    .append(statBox("Людей", peopleText(shift, " / "),
+      deficit ? "не хватает" : hasStaffCount(shift) ? "" : "норма не задана", deficit))
     .append(statBox("Часы", formatHours(shift.hours), `${timeOf(shift.type).start}–${timeOf(shift.type).end}`))
     .append(statBox("Закреплена", shift.pinned ? "Да" : "Нет", ""))));
 
@@ -731,7 +761,7 @@ function shiftPeopleSection(shift) {
       || byPositionAndName(index.employeesById.get(a), index.employeesById.get(b)));
   const url = crewShiftUrl(shift.id);
   const section = $(`<div class="drawer-section"/>`)
-    .append($(`<h6/>`).text(`Люди смены (${shift.employeeIds.length} из ${shift.staffCount})`))
+    .append($(`<h6/>`).text(`Люди смены (${peopleText(shift, " из ")})`))
     .append($(`<p class="text-muted small"/>`).text("Изменения касаются только этой смены, не бригады."));
   if (ids.length === 0) {
     section.append($(`<p class="text-muted"/>`).text("В этой смене никто не работает."));
@@ -1386,9 +1416,26 @@ function openSampleDialog(lineId) {
   $("#sampleModalTitle").text(`Очередь бригад: ${line == null ? lineId : line.name}`);
   $("#sampleFrom").val(month.atDay(1).toString())
     .attr({min: month.atDay(1).toString(), max: month.atEndOfMonth().minusDays(3).toString()});
+  // "По дату": reset on every open to the last day of the shown month
+  $("#sampleTo").val(month.atEndOfMonth().toString()).attr("max", month.atEndOfMonth().toString());
+  updateSampleToMin();
   renderSampleDays();
   modal("generateModal").hide();
   modal("sampleModal").show();
+}
+
+// The 4th day of the queue: "По дату" must not be earlier (min of the field; a later date is moved up to it)
+function sampleLastQueueDay() {
+  const from = $("#sampleFrom").val();
+  return from ? JSJoda.LocalDate.parse(from).plusDays(3).toString() : null;
+}
+
+function updateSampleToMin() {
+  const min = sampleLastQueueDay();
+  $("#sampleTo").attr("min", min || "");
+  if (min && $("#sampleTo").val() && $("#sampleTo").val() < min) {
+    $("#sampleTo").val(min);
+  }
 }
 
 function renderSampleDays() {
@@ -1424,12 +1471,19 @@ function saveSample(fill) {
     showSimpleError("Выберите минимум 3 разные бригады.");
     return;
   }
+  // "По дату" is used only to fill the line; empty = up to the end of the month
+  const to = fill ? ($("#sampleTo").val() || null) : null;
+  const lastQueueDay = sampleLastQueueDay();
+  if (to != null && to < lastQueueDay) {
+    showSimpleError(`Дата «по» должна быть не раньше ${formatDate(lastQueueDay)}.`);
+    return;
+  }
   send("PUT", `/crew-schedules/lines/${encodeURIComponent(lineId)}/sample`, {from: from, dayCrewIds: dayCrewIds})
     .done(roster => {
       modal("sampleModal").hide();
       onRosterChanged(roster).done(() => {
         if (fill) {
-          runGeneration({lineId: lineId, from: from, startCrewId: null, pin: true});
+          runGeneration({lineId: lineId, from: from, to: to, startCrewId: null, pin: true});
         } else {
           modal("generateModal").show();
           renderGenerateLines();
