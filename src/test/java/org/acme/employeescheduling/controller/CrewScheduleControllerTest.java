@@ -17,7 +17,9 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.YearMonth;
+import java.io.ByteArrayInputStream;
 import java.util.List;
+import java.util.Map;
 
 import org.acme.employeescheduling.config.ClockConfig;
 import org.acme.employeescheduling.config.SessionHeader;
@@ -34,7 +36,10 @@ import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleFactory;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.CrewRotationGenerator;
+import org.acme.employeescheduling.service.ScheduleExcelExporter;
 import org.acme.employeescheduling.service.ScheduleValidator;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +54,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 @WebMvcTest(CrewScheduleController.class)
 @Import({ CrewScheduleSessionService.class, CrewScheduleRepository.class, CrewRosterService.class,
         CrewScheduleFactory.class, CrewScheduleEditor.class, CrewRotationGenerator.class, ScheduleValidator.class,
+        ScheduleExcelExporter.class,
         ClockConfig.class })
 class CrewScheduleControllerTest {
 
@@ -201,6 +207,39 @@ class CrewScheduleControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", containsString("no-cache")))
                 .andExpect(header().exists("Last-Modified"));
+    }
+
+    @Test
+    void exportExcel() throws Exception {
+        mvc.perform(json(post("/crew-schedules/generate"), "{\"lineId\": \"" + KC + "\"}"))
+                .andExpect(status().isOk());
+
+        byte[] body = mvc.perform(get("/crew-schedules/export.xlsx"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", ScheduleExcelExporter.CONTENT_TYPE))
+                .andExpect(header().string("Content-Disposition", "attachment; filename=\"crew-schedule-2026-11.xlsx\"; "
+                        + "filename*=UTF-8''" + encode("График_бригад_2026-11.xlsx")))
+                .andReturn().getResponse().getContentAsByteArray();
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(body))) {
+            assertThat(workbook.getSheetName(0)).isEqualTo("По линиям");
+        }
+
+        mvc.perform(get("/crew-schedules/export.xlsx").param("lineId", KC))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition",
+                        containsString("filename*=UTF-8''" + encode("График_бригад_2026-11_" + KC + ".xlsx"))));
+        mvc.perform(get("/crew-schedules/export.xlsx").param("lineId", "L9"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void exportWithoutAVersionIs404() throws Exception {
+        // No version at all, also no default one (e.g. the DB was not reachable at startup)
+        ((Map<?, ?>) ReflectionTestUtils.getField(repository, "sessionSchedules")).clear();
+
+        mvc.perform(get("/crew-schedules/export.xlsx").header(SessionHeader.HEADER, "new-session"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value(containsString("No schedule version")));
     }
 
     @Test

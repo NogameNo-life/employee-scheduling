@@ -60,6 +60,13 @@ $(document).ready(function () {
   $("#bulkPinButton").click(() => bulkPin(true));
   $("#bulkUnpinButton").click(() => bulkPin(false));
   $("#clearButton").click(clearFromGenerateDialog);
+  $("#exportMonth").click(() => downloadExport(null));
+  $("#exportLine").click(openExportLineDialog);
+  $("#exportModalSave").click(() => {
+    const lineId = $("#exportLineSelect").val();
+    modal("exportModal").hide();
+    downloadExport(lineId);
+  });
   $("#clearIncludePinned").on("change", renderClearDialog);
   $("#clearModalSave").click(saveClear);
   $("#lineMenuClear").click(() => {
@@ -477,6 +484,7 @@ function employeeRowHtml(employee, today) {
   return `<tr>${label}${cells}</tr>`;
 }
 
+// TODO: the same rule is on the server (EmployeeDayStatus, used by the Excel export); use one source later.
 // What an employee does on a date: works (Д / Н, dashed = substitute), is absent (Б, ОТ, У, ПР), was taken off a
 // shift of the crew (crossed out), otherwise О (after a night shift) or В
 function employeeCell(employee, date) {
@@ -1058,6 +1066,69 @@ function sendGeneration(request, overwrite, preview) {
 // "с 05.11 по 15.11"
 function periodText(from, to) {
   return `с ${shortDate(from)} по ${shortDate(to)}`;
+}
+
+// ----- Excel export -----
+
+// "Текущая линия…": the line of the open crew shift, else the first line
+function openExportLineDialog() {
+  if (lastSchedule == null || index.lines.length === 0) {
+    showSimpleError("Нет графика для выгрузки.");
+    return;
+  }
+  const select = $("#exportLineSelect").empty()
+    .append(index.lines.map(line => $(`<option/>`).val(line.id).text(line.name)));
+  const shift = drawer != null && drawer.kind === "shift" ? index.shiftsById.get(drawer.id) : null;
+  select.val(shift != null ? shift.line.id : index.lines[0].id);
+  modal("exportModal").show();
+}
+
+// fetch (not a link): the request must have the X-Session-Id header. The file name comes from Content-Disposition.
+async function downloadExport(lineId) {
+  const button = $("#exportButton").prop("disabled", true);
+  const url = "/crew-schedules/export.xlsx" + (lineId ? `?lineId=${encodeURIComponent(lineId)}` : "");
+  try {
+    const response = await fetch(url, {headers: {"X-Session-Id": sessionId}});
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        detail = (await response.json()).message || detail;
+      } catch (e) {
+        // Not JSON: keep the status text
+      }
+      showNotification("Не удалось выгрузить график в Excel.", detail);
+      return;
+    }
+    const blob = await response.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = fileNameOf(response.headers.get("Content-Disposition")) || "crew-schedule.xlsx";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  } catch (e) {
+    showNotification("Не удалось выгрузить график в Excel.", String(e));
+  } finally {
+    button.prop("disabled", false);
+  }
+}
+
+// filename*=UTF-8''<url-encoded> (Cyrillic name), else filename="<ascii>"
+function fileNameOf(disposition) {
+  if (!disposition) {
+    return null;
+  }
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1].trim());
+    } catch (e) {
+      // Broken encoding: use the ASCII name
+    }
+  }
+  const ascii = /filename="([^"]+)"/i.exec(disposition);
+  return ascii ? ascii[1] : null;
 }
 
 // ----- Clear the crew shifts of a line / all lines in a period -----

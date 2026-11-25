@@ -1,5 +1,8 @@
 package org.acme.employeescheduling.controller;
 
+import java.io.ByteArrayOutputStream;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -27,12 +30,16 @@ import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
 import org.acme.employeescheduling.service.CrewScheduleEditor.SampleRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
+import org.acme.employeescheduling.service.ScheduleExcelExporter;
 import org.acme.employeescheduling.service.ScheduleValidator;
 import org.acme.employeescheduling.service.ScheduleValidator.ScheduleWarning;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -61,17 +68,19 @@ public class CrewScheduleController {
     private final CrewRotationGenerator generator;
     private final ScheduleValidator validator;
     private final CrewDataCache crewDataCache;
+    private final ScheduleExcelExporter excelExporter;
     private final Clock clock;
 
     public CrewScheduleController(CrewScheduleSessionService sessionService, CrewRosterService rosterService,
             CrewScheduleEditor editor, CrewRotationGenerator generator, ScheduleValidator validator,
-            CrewDataCache crewDataCache, Clock clock) {
+            CrewDataCache crewDataCache, ScheduleExcelExporter excelExporter, Clock clock) {
         this.sessionService = sessionService;
         this.rosterService = rosterService;
         this.editor = editor;
         this.generator = generator;
         this.validator = validator;
         this.crewDataCache = crewDataCache;
+        this.excelExporter = excelExporter;
         this.clock = clock;
     }
 
@@ -100,6 +109,30 @@ public class CrewScheduleController {
     @GetMapping("/lines")
     public List<Line> lines() {
         return crewDataCache.getLines(YearMonth.now(clock));
+    }
+
+    /**
+     * The caller's version as an Excel workbook (sheets "По линиям", "По сотрудникам", "Нарушения"), built in memory
+     * and not saved anywhere. {@code lineId}: only that line (404 if unknown). The file name has Cyrillic letters, so
+     * Content-Disposition has an ASCII {@code filename} and the real name in {@code filename*} (RFC 6266 / 5987).
+     */
+    @GetMapping("/export.xlsx")
+    public ResponseEntity<byte[]> exportExcel(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestParam(required = false) String lineId) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        YearMonth[] month = new YearMonth[1];
+        sessionService.edit(sessionId, schedule -> {
+            month[0] = schedule.getMonth();
+            excelExporter.export(schedule, lineId, validator.validate(schedule), out);
+        });
+        String name = ScheduleExcelExporter.fileName(month[0], lineId);
+        String disposition = "attachment; filename=\"" + ScheduleExcelExporter.asciiFileName(month[0])
+                + "\"; filename*=UTF-8''" + URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(ScheduleExcelExporter.CONTENT_TYPE))
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
+                .body(out.toByteArray());
     }
 
     /** Crews of the caller's version with their lines and all their employees. */

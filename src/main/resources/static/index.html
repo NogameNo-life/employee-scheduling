@@ -56,6 +56,16 @@
         <span class="fas fa-save me-1"></span>Сохранить
       </button>
     </span>
+    <div class="dropdown">
+      <button type="button" class="btn btn-outline-dark dropdown-toggle" id="exportButton" data-bs-toggle="dropdown"
+              aria-expanded="false">
+        <span class="fas fa-file-excel me-1"></span>Экспорт
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="exportButton">
+        <li><button type="button" class="dropdown-item" id="exportMonth">Весь месяц</button></li>
+        <li><button type="button" class="dropdown-item" id="exportLine">Текущая линия…</button></li>
+      </ul>
+    </div>
     <a href="/instruction.html" target="_blank" rel="noopener" class="btn btn-outline-dark" id="instructionButton">
       <span class="fas fa-question-circle me-1"></span>Инструкция
     </a>
@@ -193,6 +203,29 @@
         <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
         <button type="button" class="btn btn-outline-dark" id="overwriteModalFill">Только дополнить пустые</button>
         <button type="button" class="btn btn-danger" id="overwriteModalReplace">Перезаписать незакреплённые</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Excel export of one line -->
+<div class="modal fade" id="exportModal" tabindex="-1" aria-labelledby="exportModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="exportModalTitle">Экспорт линии</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <label for="exportLineSelect" class="form-label">Линия</label>
+        <select id="exportLineSelect" class="form-select"></select>
+        <p class="text-muted small mt-2 mb-0">В файле: смены этой линии и сотрудники, которые на ней работают.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-dark" id="exportModalSave">
+          <span class="fas fa-download me-1"></span>Скачать
+        </button>
       </div>
     </div>
   </div>
