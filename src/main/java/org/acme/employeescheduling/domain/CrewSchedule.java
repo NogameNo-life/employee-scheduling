@@ -2,7 +2,6 @@ package org.acme.employeescheduling.domain;
 
 import java.time.YearMonth;
 import java.util.List;
-import java.util.Map;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
@@ -12,7 +11,7 @@ import lombok.Setter;
 
 /**
  * One schedule version for one month: the crew schedule by line (entered by the user) and the employees
- * in every crew shift. Crews, employees and the composition are the version's own copies, so the user can
+ * in every crew shift. Crews and employees are the version's own copies, so the user can
  * change them without changing other versions. The lists are mutable: the editor changes them in place.
  */
 @Getter
@@ -22,38 +21,33 @@ public class CrewSchedule {
 
     private YearMonth month;
 
-    /** Production lines (PLR_PLINES), also the ones without crew shifts. */
+    /** Lines active in the month (PLR_LC), also the ones without crew shifts. */
     private List<Line> lines;
+
+    /** Times of the shift types (PLR_SM): DAY and NIGHT. In the JSON as {@code shifts}. */
+    private List<ShiftTime> shifts;
 
     /** Crews, each with its own employees. */
     private List<Crew> crews;
 
-    private List<Role> roles;
-
     private List<Employee> employees;
-
-    /**
-     * Crew id -> role -> people needed per shift (PLR_RLBR). Not in the JSON: Jackson would write the
-     * Role keys as strings; {@code GET /crew-schedules/crews} has it per crew.
-     */
-    @JsonIgnore
-    private Map<Integer, Map<Role, Integer>> composition;
 
     private List<CrewShift> crewShifts;
 
-    /** One seat per role and person in every crew shift, from {@link #composition}. */
-    private List<Position> positions;
-
-    public CrewSchedule(YearMonth month, List<Line> lines, List<Crew> crews, List<Role> roles,
-            List<Employee> employees, Map<Integer, Map<Role, Integer>> composition, List<CrewShift> crewShifts,
-            List<Position> positions) {
+    public CrewSchedule(YearMonth month, List<Line> lines, List<ShiftTime> shifts, List<Crew> crews,
+            List<Employee> employees, List<CrewShift> crewShifts) {
         this.month = month;
         this.lines = lines;
+        this.shifts = shifts;
         this.crews = crews;
-        this.roles = roles;
         this.employees = employees;
-        this.composition = composition;
         this.crewShifts = crewShifts;
-        this.positions = positions;
+    }
+
+    /** The times of a shift type; the default times if the version has none for it. */
+    @JsonIgnore
+    public ShiftTime getShift(ShiftType type) {
+        return shifts.stream().filter(shift -> shift.type() == type).findFirst()
+                .orElseGet(() -> ShiftTime.defaultFor(type));
     }
 }

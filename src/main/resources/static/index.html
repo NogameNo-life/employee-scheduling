@@ -1,238 +1,301 @@
-<html lang="en">
+<!DOCTYPE html>
+<html lang="ru">
 <head>
-  <meta content="text/html; charset=UTF-8" http-equiv="Content-Type">
-  <meta content="width=device-width, initial-scale=1" name="viewport">
-  <title>Employee scheduling</title>
-
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.2/styles/vis-timeline-graph2d.min.css"
-        integrity="sha256-svzNasPg1yR5gvEaRei2jg+n4Pc3sVyMUWeS6xRAh6U=" crossorigin="anonymous">
-
-  <link rel="stylesheet" href="/webjars/bootstrap/css/bootstrap.min.css"/>
-  <link rel="stylesheet" href="/webjars/font-awesome/css/all.css"/>
-  <style>
-    .vis-time-axis .vis-grid.vis-saturday,
-    .vis-time-axis .vis-grid.vis-sunday {
-      background: #D3D7CFFF;
-    }
-    .vis-item { cursor: pointer; }
-    .vis-item.pinned { border-width: 3px; border-color: #2E3436; }
-    .vis-item.absent { background-color: #EEEEEC; border-color: #BABDB6; color: #888A85; text-decoration: line-through; }
-    .vis-item.substitute { border-style: dashed; border-width: 2px; border-color: #2E3436; }
-    .pin-toggle { cursor: pointer; }
-    .crew-link:hover, .people-link:hover { text-decoration: underline; }
-    .people-link, .employee-link { cursor: pointer; }
-    .employee-link:hover { text-decoration: underline; }
-    .vis-item.vis-background.absence { background-color: rgba(239, 41, 41, .12); }
-    .role-count { width: 5rem; }
-    .crew-color { display: inline-block; width: .9rem; height: .9rem; border-radius: .2rem; }
-  </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>График бригад</title>
+  <!-- Only local files (webjars): the plant network may have no internet -->
+  <link rel="stylesheet" href="/webjars/bootstrap/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/webjars/font-awesome/css/all.css">
+  <link rel="stylesheet" href="/style.css">
 </head>
 
 <body>
-<div class="container-fluid">
-  <div class="sticky-top d-flex justify-content-center align-items-center" aria-live="polite" aria-atomic="true">
-    <div id="notificationPanel" style="position: absolute; top: .5rem;"></div>
-  </div>
-  <h1>Employee scheduling</h1>
-  <p>
-    Crew schedule by line: every day one crew works the day shift (08:00-20:00) and one crew works
-    the night shift (20:00-08:00). Usually every crew works Day - Night - Sleep day - Day off.
-  </p>
-  <p class="text-muted small mb-2">
-    <strong>Add:</strong> double-click an empty place on a line (08:00-20:00 = day shift, 20:00-08:00 = night shift).
-    <strong>Change the crew:</strong> double-click a shift. <strong>Move:</strong> drag a shift.
-    <strong>Remove:</strong> select a shift and press &times;.
-    <strong>Pin:</strong> click <span class="fas fa-lock-open"></span> on a shift; a pinned shift cannot be moved or removed.
-    <strong>People:</strong> click the crew name or
-    <span class="fas fa-users"></span> on a shift to see and change the people of this one shift (the crew does not change).
-    Click a crew in the crew list below to change the crew for all days.
-  </p>
-  <p class="text-muted small mb-2">
-    <strong>By employee:</strong> a crew shift has the employees of its crew, but one shift can differ.
-    Double-click an employee's shift to take them off this shift or replace them with a free employee
-    (dashed = substitute, grey = absent). Double-click an empty place in an employee's row to add them to a crew
-    shift at that time. Only that shift changes, not the crew. Click an employee's name to enter a vacation,
-    sick leave or dismissal, or to move them to another crew from a date (red background = absence).
-  </p>
-  <p class="text-muted small" id="version"></p>
+<div id="notificationPanel" aria-live="polite" aria-atomic="true"></div>
 
-  <div class="mb-2">
-    <input id="monthInput" type="month" class="form-control d-inline-block w-auto align-middle">
-    <button id="newMonthButton" type="button" class="btn btn-secondary">
-      <span class="fas fa-calendar-plus"></span> New empty month
+<header class="app-header">
+  <div class="title-block">
+    <h1 class="app-title">График бригад</h1>
+    <div class="chips">
+      <button type="button" id="warningChip" class="chip chip-warning">
+        <span class="fas fa-exclamation-triangle"></span><span class="text"></span>
+      </button>
+      <button type="button" id="deficitChip" class="chip chip-deficit">
+        <span class="fas fa-user-minus"></span><span class="text"></span>
+      </button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <fieldset class="segmented" aria-label="Месяц">
+      <button type="button" id="prevMonthButton" title="Предыдущий месяц" aria-label="Предыдущий месяц">
+        <span class="fas fa-chevron-left"></span>
+      </button>
+      <span class="month-label"><span class="far fa-calendar me-1"></span><span id="monthLabel"></span></span>
+      <button type="button" id="nextMonthButton" title="Следующий месяц" aria-label="Следующий месяц">
+        <span class="fas fa-chevron-right"></span>
+      </button>
+    </fieldset>
+    <fieldset class="segmented" aria-label="Вид">
+      <button type="button" id="viewLinesButton" class="active">
+        <span class="fas fa-th me-1"></span>По линиям
+      </button>
+      <button type="button" id="viewEmployeesButton">
+        <span class="fas fa-users me-1"></span>По сотрудникам
+      </button>
+    </fieldset>
+    <button type="button" id="newMonthButton" class="btn btn-outline-dark">
+      <span class="fas fa-calendar-plus me-1"></span>Новый пустой месяц
     </button>
-    <button id="refreshButton" type="button" class="btn btn-secondary">
-      <span class="fas fa-refresh"></span> Refresh
+    <button type="button" id="generateButton" class="btn btn-dark">
+      <span class="fas fa-magic me-1"></span>Авто-заполнение
     </button>
-    <span id="unassignedPositions" class="ms-2 align-middle fw-bold"></span>
+    <!-- A disabled button shows no tooltip, so the wrapper has it -->
+    <span class="d-inline-block" title="Сохранение в БД ещё не сделано">
+      <button type="button" class="btn btn-success" disabled style="pointer-events: none;">
+        <span class="fas fa-save me-1"></span>Сохранить
+      </button>
+    </span>
+    <a href="/instruction.html" target="_blank" rel="noopener" class="btn btn-outline-dark" id="instructionButton">
+      <span class="fas fa-question-circle me-1"></span>Инструкция
+    </a>
+  </div>
+</header>
 
-    <div class="float-end">
-      <ul class="nav nav-pills" role="tablist">
-        <li class="nav-item" role="presentation">
-          <button class="nav-link active" id="byLineTab" data-bs-toggle="tab" data-bs-target="#byLinePanel" type="button" role="tab" aria-controls="byLinePanel" aria-selected="true">By line</button>
-        </li>
-        <li class="nav-item" role="presentation">
-          <button class="nav-link" id="byEmployeeTab" data-bs-toggle="tab" data-bs-target="#byEmployeePanel" type="button" role="tab" aria-controls="byEmployeePanel" aria-selected="false">By employee</button>
-        </li>
-      </ul>
+<main class="page">
+  <section class="panel legend" id="legend" aria-label="Обозначения"></section>
+
+  <div class="workspace">
+    <section class="panel grid-panel" aria-label="График">
+      <div class="grid-scroll" id="gridScroll"></div>
+    </section>
+
+    <aside class="panel drawer" id="drawer" hidden aria-label="Подробности">
+      <div class="drawer-header">
+        <div class="flex-grow-1" id="drawerHeader"></div>
+        <button type="button" class="btn-close" id="drawerClose" aria-label="Закрыть"></button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>
+    </aside>
+  </div>
+
+  <footer class="stats" id="stats"></footer>
+  <p class="text-muted small mt-3 mb-0" id="version"></p>
+</main>
+
+<!-- New month (also prev / next month): replaces the version -->
+<div class="modal fade" id="newMonthModal" tabindex="-1" aria-labelledby="newMonthModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="newMonthModalTitle">Новый месяц</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <label for="newMonthInput" class="form-label">Месяц</label>
+        <input id="newMonthInput" type="month" class="form-control mb-2">
+        <p class="text-muted small">Ваша текущая версия графика будет заменена новой.</p>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="newMonthGenerate">
+          <label class="form-check-label" for="newMonthGenerate">
+            Сгенерировать график (День → Ночь → Отсыпной → Выходной для всех линий)
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-dark" id="newMonthModalSave">Начать месяц</button>
+      </div>
     </div>
   </div>
-  <div class="mb-4 tab-content">
-    <div class="tab-pane fade show active" id="byLinePanel" role="tabpanel" aria-labelledby="byLineTab">
-      <div id="lineVisualization"></div>
-    </div>
-    <div class="tab-pane fade" id="byEmployeePanel" role="tabpanel" aria-labelledby="byEmployeeTab">
-      <div id="employeeVisualization"></div>
-    </div>
-  </div>
-
-  <h2 class="h4">Crews <span id="crewCount" class="text-muted fs-6"></span></h2>
-  <p class="text-muted small mb-2">
-    Click a crew (here, or its name in the "By employee" timeline) to see its roles and its employees (the default composition of
-    its shifts). The crew column changes the crew of an employee for the whole month; click the employee's name for a
-    crew change from a date, vacation, sick leave or dismissal. Roles are read-only. Changes are kept only in your
-    schedule version.
-  </p>
-  <div class="accordion mb-4" id="crewList"></div>
 </div>
 
+<!-- Generator -->
+<div class="modal fade" id="generateModal" tabindex="-1" aria-labelledby="generateModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="generateModalTitle">Авто-заполнение графика</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">
+          Цикл День → Ночь → Отсыпной → Выходной в выбранном периоде. Линия со своей очередью или закреплёнными сменами
+          продолжает их, остальные идут по умолчанию. Закреплённые смены не меняются.
+        </p>
+        <label for="generateLine" class="form-label">Линия</label>
+        <select id="generateLine" class="form-select mb-2"></select>
+        <div class="row g-2 mb-2">
+          <div class="col">
+            <label for="generateFrom" class="form-label">С даты</label>
+            <input id="generateFrom" type="date" class="form-control">
+          </div>
+          <div class="col">
+            <label for="generateTo" class="form-label">По дату</label>
+            <input id="generateTo" type="date" class="form-control" aria-describedby="generateToHint">
+          </div>
+        </div>
+        <p class="text-muted small" id="generateToHint">Пустая дата «по» — до конца месяца. Смены после неё не меняются.</p>
+        <label for="generateStartCrew" class="form-label">Бригада в дневную смену первого дня</label>
+        <select id="generateStartCrew" class="form-select mb-2"></select>
+        <div class="form-check mb-3">
+          <input class="form-check-input" type="checkbox" id="generatePin" checked>
+          <label class="form-check-label" for="generatePin">Закрепить сгенерированные смены</label>
+        </div>
+        <h6 class="mb-1">Очередь бригад по линиям</h6>
+        <ul class="plain-list generate-lines" id="generateLineList"></ul>
+        <hr>
+        <h6 class="mb-2">Закрепление и очистка за период</h6>
+        <div class="row g-2 align-items-end">
+          <div class="col">
+            <label for="bulkPinFrom" class="form-label small mb-0">с</label>
+            <input id="bulkPinFrom" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col">
+            <label for="bulkPinTo" class="form-label small mb-0">по</label>
+            <input id="bulkPinTo" type="date" class="form-control form-control-sm">
+          </div>
+          <div class="col-auto">
+            <button type="button" class="btn btn-sm btn-outline-dark" id="bulkPinButton">
+              <span class="fas fa-lock me-1"></span>Закрепить всё
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-dark" id="bulkUnpinButton">
+              <span class="fas fa-lock-open me-1"></span>Открепить всё
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-danger" id="clearButton">
+              <span class="fas fa-eraser me-1"></span>Очистить
+            </button>
+          </div>
+        </div>
+        <p class="text-muted small mt-1 mb-0">Для линии, выбранной выше (или всех линий).</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-dark" id="generateModalSave">Заполнить</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Partly filled period: what to do with the unpinned crew shifts -->
+<div class="modal fade" id="overwriteModal" tabindex="-1" aria-labelledby="overwriteModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="overwriteModalTitle">Период уже заполнен частично</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <p id="overwriteModalText" class="mb-1"></p>
+        <p id="overwriteModalPinned" class="text-muted small mb-0"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-outline-dark" id="overwriteModalFill">Только дополнить пустые</button>
+        <button type="button" class="btn btn-danger" id="overwriteModalReplace">Перезаписать незакреплённые</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Clear the crew shifts of a line / all lines in a period -->
+<div class="modal fade" id="clearModal" tabindex="-1" aria-labelledby="clearModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="clearModalTitle">Очистить смены</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <p id="clearModalText" class="mb-2"></p>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="clearIncludePinned">
+          <label class="form-check-label" for="clearIncludePinned" id="clearIncludePinnedLabel">Включая закреплённые</label>
+        </div>
+        <p id="clearModalNote" class="small text-danger mt-2 mb-0" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-danger" id="clearModalSave">
+          <span class="fas fa-eraser me-1"></span>Удалить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Menu of a line row ("По линиям"), placed under its ⋯ button -->
+<div id="lineMenu" class="line-menu" role="menu" hidden>
+  <button type="button" role="menuitem" id="lineMenuClear">
+    <span class="fas fa-eraser me-2"></span>Очистить линию за месяц
+  </button>
+</div>
+
+<!-- Sample of one line: DAY crews of 4 days in a row -->
+<div class="modal fade" id="sampleModal" tabindex="-1" aria-labelledby="sampleModalTitle" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="sampleModalTitle">Очередь бригад</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">
+          Дневные бригады 4 дней подряд, минимум 3 разные. Ночные смены следуют из цепочки: ночью работает дневная
+          бригада предыдущего дня. Дневные смены очереди будут закреплены.
+        </p>
+        <label for="sampleFrom" class="form-label">Первый день</label>
+        <input id="sampleFrom" type="date" class="form-control mb-2">
+        <div id="sampleDays"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-outline-dark" id="sampleSave">Поставить очередь</button>
+        <button type="button" class="btn btn-dark" id="sampleSaveFill">Поставить и заполнить линию</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Crew picker for an empty line shift -->
 <div class="modal fade" id="crewShiftModal" tabindex="-1" aria-labelledby="crewShiftModalTitle" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="crewShiftModalTitle">Crew shift</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <h5 class="modal-title" id="crewShiftModalTitle">Поставить бригаду</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
       </div>
       <div class="modal-body">
         <p id="crewShiftModalSlot" class="mb-2"></p>
-        <label for="crewShiftModalCrew" class="form-label">Crew</label>
+        <label for="crewShiftModalCrew" class="form-label">Бригада</label>
         <select id="crewShiftModalCrew" class="form-select"></select>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-primary" id="crewShiftModalSave">Save</button>
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-dark" id="crewShiftModalSave">Поставить</button>
       </div>
     </div>
   </div>
 </div>
 
+<!-- One employee on one crew shift ("По сотрудникам" cell): take off / replace / back / add -->
 <div class="modal fade" id="shiftEmployeeModal" tabindex="-1" aria-labelledby="shiftEmployeeModalTitle" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="shiftEmployeeModalTitle">Employee</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        <h5 class="modal-title" id="shiftEmployeeModalTitle">Сотрудник</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрыть"></button>
       </div>
       <div class="modal-body">
         <p id="shiftEmployeeModalText" class="mb-2"></p>
         <div id="shiftEmployeeModalSelectGroup">
-          <label for="shiftEmployeeModalSelect" class="form-label" id="shiftEmployeeModalSelectLabel"></label>
+          <label for="shiftEmployeeModalSelect" class="form-label" id="shiftEmployeeModalSelectLabel">Выбор</label>
           <select id="shiftEmployeeModalSelect" class="form-select"></select>
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-primary" id="shiftEmployeeModalSave">Save</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="modal fade" id="shiftPeopleModal" tabindex="-1" aria-labelledby="shiftPeopleModalTitle" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="shiftPeopleModalTitle">People of the crew shift</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <p id="shiftPeopleModalSlot" class="mb-1"></p>
-        <p class="text-muted small mb-2">Changes are made only for this shift, not for the crew.</p>
-        <div id="shiftPeopleModalList"></div>
-        <h6 class="mt-3">People needed in this shift</h6>
-        <p class="text-muted small mb-1" id="shiftPeopleModalCompositionText"></p>
-        <div id="shiftPeopleModalComposition"></div>
-        <div class="d-flex gap-2 mt-1">
-          <select id="shiftPeopleModalAddRole" class="form-select form-select-sm w-auto"></select>
-          <button type="button" class="btn btn-sm btn-primary" id="shiftPeopleModalCompositionSave">Save the numbers</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary" id="shiftPeopleModalCompositionReset">
-            Back to the crew's numbers
-          </button>
-        </div>
-        <label for="shiftPeopleModalAdd" class="form-label mt-2">Add an employee to this shift</label>
-        <div class="input-group">
-          <select id="shiftPeopleModalAdd" class="form-select"></select>
-          <button type="button" class="btn btn-primary" id="shiftPeopleModalAddButton">
-            <span class="fas fa-user-plus"></span> Add
-          </button>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-outline-secondary me-auto" id="shiftPeopleModalCrewButton">
-          Show the crew in the crew list
-        </button>
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="modal fade" id="employeeModal" tabindex="-1" aria-labelledby="employeeModalTitle" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title" id="employeeModalTitle">Employee</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <p id="employeeModalRoles" class="text-muted mb-2"></p>
-
-        <h6>Crew</h6>
-        <ul id="employeeModalCrews" class="list-unstyled mb-2"></ul>
-        <div class="row g-2 align-items-end mb-3">
-          <div class="col-auto">
-            <label for="employeeModalCrew" class="form-label small mb-0">Move to crew</label>
-            <select id="employeeModalCrew" class="form-select form-select-sm"></select>
-          </div>
-          <div class="col-auto">
-            <label for="employeeModalCrewFrom" class="form-label small mb-0">from</label>
-            <input id="employeeModalCrewFrom" type="date" class="form-control form-control-sm">
-          </div>
-          <div class="col-auto">
-            <button type="button" class="btn btn-sm btn-primary" id="employeeModalCrewSave">Move</button>
-          </div>
-        </div>
-
-        <h6>Absences (vacation, sick leave, dismissal)</h6>
-        <ul id="employeeModalAbsences" class="list-unstyled mb-2"></ul>
-        <div class="row g-2 align-items-end">
-          <div class="col-auto">
-            <label for="employeeModalAbsenceType" class="form-label small mb-0">Type</label>
-            <select id="employeeModalAbsenceType" class="form-select form-select-sm">
-              <option value="VACATION">Vacation</option>
-              <option value="SICK_LEAVE">Sick leave</option>
-              <option value="DISMISSAL">Dismissal (no end)</option>
-              <option value="OTHER">Other</option>
-            </select>
-          </div>
-          <div class="col-auto">
-            <label for="employeeModalAbsenceFrom" class="form-label small mb-0">from</label>
-            <input id="employeeModalAbsenceFrom" type="date" class="form-control form-control-sm">
-          </div>
-          <div class="col-auto">
-            <label for="employeeModalAbsenceTo" class="form-label small mb-0">to (included)</label>
-            <input id="employeeModalAbsenceTo" type="date" class="form-control form-control-sm">
-          </div>
-          <div class="col-auto">
-            <button type="button" class="btn btn-sm btn-primary" id="employeeModalAbsenceSave">Add</button>
-          </div>
-        </div>
-        <p class="text-muted small mt-2 mb-0">
-          An absent employee works no shift that starts on these days. Changes are kept only in your schedule version.
-        </p>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-outline-dark" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-dark" id="shiftEmployeeModalSave">Сохранить</button>
       </div>
     </div>
   </div>
@@ -241,8 +304,6 @@
 <script src="/webjars/jquery/jquery.min.js"></script>
 <script src="/webjars/bootstrap/js/bootstrap.bundle.min.js"></script>
 <script src="/webjars/js-joda/dist/js-joda.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.2/standalone/umd/vis-timeline-graph2d.min.js"
-        integrity="sha256-Jy2+UO7rZ2Dgik50z3XrrNpnc5+2PAx9MhL2CicodME=" crossorigin="anonymous"></script>
 <script src="/app.js"></script>
 </body>
 </html>

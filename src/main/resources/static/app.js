@@ -1,132 +1,122 @@
+// Crew schedule UI: "По линиям" (grid of crew shifts per line and day) and "По сотрудникам" (shift codes per
+// employee and day), a drawer on the right for one crew shift or one employee. Everything is drawn from the
+// schedule version of this browser tab (X-Session-Id). Text is inserted escaped (escapeHtml / jQuery .text()).
+
 // Every browser tab is one user with its own schedule version (same key as production-automation-portal-react)
 const sessionId = getSessionId();
 
-const timeFormat = JSJoda.DateTimeFormatter.ofPattern("HH:mm");
-
-const byLinePanel = document.getElementById("lineVisualization");
-const byLineTimelineOptions = {
-  timeAxis: {scale: "day"},
-  orientation: {axis: "top"},
-  stack: false,
-  xss: {disabled: true}, // Items are XSS safe through JQuery
-  zoomMin: 1000 * 60 * 60 * 24, // One day in milliseconds
-  // Crew shifts are added with a double-click (crew picker), moved by dragging and removed with the x.
-  // Pinned crew shifts have editable: false.
-  editable: {add: false, remove: true, updateTime: true, updateGroup: true, overrideItems: false},
-  snap: snapToShiftStart,
-  onMove: moveCrewShift,
-  onRemove: removeCrewShift
+const MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь",
+  "Октябрь", "Ноябрь", "Декабрь"];
+const WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+const ABSENCES = {
+  SICK_LEAVE: {code: "Б", name: "Больничный", css: "code-sick"},
+  VACATION: {code: "ОТ", name: "Отпуск", css: "code-vacation"},
+  DISMISSAL: {code: "У", name: "Увольнение", css: "code-dismissal"},
+  OTHER: {code: "ПР", name: "Другое отсутствие", css: "code-other"}
 };
-var byLineGroupDataSet = new vis.DataSet();
-var byLineItemDataSet = new vis.DataSet();
-var byLineTimeline = new vis.Timeline(byLinePanel, byLineItemDataSet, byLineGroupDataSet, byLineTimelineOptions);
 
-const byEmployeePanel = document.getElementById("employeeVisualization");
-const byEmployeeTimelineOptions = {
-  timeAxis: {scale: "day"},
-  orientation: {axis: "top"},
-  stack: false,
-  xss: {disabled: true}, // Items are XSS safe through JQuery
-  zoomMin: 1000 * 60 * 60 * 24 // One day in milliseconds
-};
-var byEmployeeGroupDataSet = new vis.DataSet();
-var byEmployeeItemDataSet = new vis.DataSet();
-var byEmployeeTimeline = new vis.Timeline(byEmployeePanel, byEmployeeItemDataSet, byEmployeeGroupDataSet,
-  byEmployeeTimelineOptions);
-
-// Month shown in the timelines: the window is set again only when it changes, not after every edit
-let shownMonth = null;
-// Line id -> line, crews (CrewDetails) and roles of the version: for the crew picker and the crew list
-const linesById = new Map();
-let crewDetailsList = [];
-// The whole version (GET /crew-schedules) for the "By employee" tab
+// ---------- State ----------
+// The whole version (GET /crew-schedules) and the rest warnings of the last answer (RotationResponse)
 let lastSchedule = null;
-// The line shift the crew picker is open for: {date, type, lineId, crewShiftId (null: new), crewId}
+let lastWarnings = [];
+// Month of the version (yyyy-MM); without a version: the current month
+let shownMonth = JSJoda.YearMonth.now().toString();
+let view = loadView();
+// What the drawer shows: {kind: "shift", id} or {kind: "employee", id}; null: closed
+let drawer = null;
+// The empty line shift the crew picker is open for: {date, type, lineId}
 let pickerSlot = null;
-// What the employee dialog of the "By employee" tab is open for: {mode, employeeId, crewShiftId}
+// What the employee dialog of a "По сотрудникам" cell is open for: {mode, employeeId, crewShiftId}
 let employeeDialog = null;
-// The crew shift whose people dialog is open (null: closed)
-let peopleDialogCrewShiftId = null;
-// The employee whose dialog (crew changes, absences) is open (null: closed)
-let employeeModalId = null;
+// The crew shift that is being dragged (HTML5 drag and drop)
+let draggedShiftId = null;
+// Times of the shift types (PLR_SM) from the server; these defaults are used until the first answer
+let shiftTimes = [
+  {type: "DAY", start: "08:00", end: "20:00", hours: 12},
+  {type: "NIGHT", start: "20:00", end: "08:00", hours: 12}
+];
+// The generation waiting for the answer of the overwrite dialog: {lineId, from, startCrewId, pin}
+let pendingGeneration = null;
+// The period of the generation that was just sent ({from, to}), for the result toast
+let generationPeriod = null;
+// What the clear dialog is open for: {lineId, preview}
+let pendingClear = null;
+// The line of the open sample dialog
+let sampleLineId = null;
+// Lookups, built again for every version (buildIndex)
+let index = emptyIndex();
 
 $(document).ready(function () {
-  $("#newMonthButton").click(function () {
-    newEmptyMonth();
+  $("#prevMonthButton").click(() => openNewMonthDialog(plusMonths(shownMonth, -1)));
+  $("#nextMonthButton").click(() => openNewMonthDialog(plusMonths(shownMonth, 1)));
+  $("#newMonthButton").click(() => openNewMonthDialog(shownMonth));
+  $("#newMonthModalSave").click(startNewMonth);
+  $("#generateButton").click(openGenerateDialog);
+  $("#generateLine").on("change", renderGenerateStartCrews);
+  $("#generateFrom").on("change", onGenerateFromChange);
+  $("#generateModalSave").click(startGeneration);
+  $("#overwriteModalReplace").click(() => answerOverwrite(true));
+  $("#overwriteModalFill").click(() => answerOverwrite(false));
+  $("#bulkPinButton").click(() => bulkPin(true));
+  $("#bulkUnpinButton").click(() => bulkPin(false));
+  $("#clearButton").click(clearFromGenerateDialog);
+  $("#clearIncludePinned").on("change", renderClearDialog);
+  $("#clearModalSave").click(saveClear);
+  $("#lineMenuClear").click(() => {
+    const lineId = $("#lineMenu").data("line");
+    closeLineMenu();
+    openClearDialog(lineId, null, null);
   });
-  $("#refreshButton").click(function () {
-    refreshSchedule();
+  // The line menu closes on a click elsewhere, Escape and scrolling
+  $(document).on("click", event => {
+    if (!$(event.target).closest("#lineMenu, .line-menu-button").length) {
+      closeLineMenu();
+    }
   });
-  $("#crewShiftModalSave").click(function () {
-    saveCrewShift();
+  $(document).on("keydown", event => {
+    if (event.key === "Escape") {
+      closeLineMenu();
+    }
   });
-  $("#shiftEmployeeModalSave").click(function () {
-    saveShiftEmployee();
-  });
+  $(window).on("resize", closeLineMenu);
+  $("#generateLineList").on("click", ".sample-link", event => openSampleDialog(String($(event.currentTarget).data("line"))));
+  $("#sampleFrom").on("change", renderSampleDays);
+  $("#sampleSave").click(() => saveSample(false));
+  $("#sampleSaveFill").click(() => saveSample(true));
+  $("#viewLinesButton").click(() => setView("lines"));
+  $("#viewEmployeesButton").click(() => setView("employees"));
+  $("#warningChip").click(() => scrollToFirst("warning"));
+  $("#deficitChip").click(() => scrollToFirst("deficit"));
+  $("#crewShiftModalSave").click(saveCrewPicker);
+  $("#shiftEmployeeModalSave").click(saveShiftEmployee);
   $("#shiftEmployeeModalSelect").on("change", updateShiftEmployeeButton);
-  $("#shiftPeopleModalAddButton").click(function () {
-    const employeeId = parseInt($("#shiftPeopleModalAdd").val());
-    if (!isNaN(employeeId)) {
-      changeShiftPeople(send("PUT", `${crewShiftUrl(peopleDialogCrewShiftId)}/employees/${employeeId}`));
-    }
+  $("#drawerClose").click(closeDrawer);
+
+  // Grid events (the grid is drawn again after every change, so the handlers are delegated)
+  const grid = $("#gridScroll");
+  grid.on("click", ".shift-card[data-id]", event => openDrawer("shift", $(event.currentTarget).data("id")));
+  grid.on("click", ".shift-card.empty", event => {
+    const card = $(event.currentTarget);
+    openCrewPicker({date: card.data("date"), type: card.data("type"), lineId: String(card.data("line"))});
   });
-  $("#shiftPeopleModal").on("hidden.bs.modal", () => peopleDialogCrewShiftId = null);
-  $("#shiftPeopleModalCompositionSave").click(saveShiftComposition);
-  $("#shiftPeopleModalCompositionReset").click(() =>
-    changeShiftPeople(send("DELETE", `${crewShiftUrl(peopleDialogCrewShiftId)}/composition`)));
-  $("#shiftPeopleModalAddRole").on("change", event => {
-    const roleId = parseInt($(event.target).val());
-    const role = lastSchedule == null ? null : lastSchedule.roles.find(r => r.id === roleId);
-    if (role != null) {
-      $("#shiftPeopleModalComposition tbody").append(compositionRow(role, 0, 0));
-      $(event.target).find(`option[value="${roleId}"]`).remove();
-    }
-    $(event.target).val("");
+  grid.on("click", ".line-menu-button", event => toggleLineMenu($(event.currentTarget)));
+  grid.on("scroll", closeLineMenu);
+  grid.on("click", ".emp-label", event => openDrawer("employee", $(event.currentTarget).data("employee")));
+  grid.on("click", ".emp-cell", event => {
+    const cell = $(event.currentTarget);
+    onEmployeeCellClick(cell.data("employee"), cell.data("date"));
   });
-  $("#employeeModal").on("hidden.bs.modal", () => employeeModalId = null);
-  $("#employeeModalCrewSave").click(saveEmployeeCrew);
-  $("#employeeModalAbsenceSave").click(saveAbsence);
-  $("#employeeModalAbsenceType").on("change", event =>
-    $("#employeeModalAbsenceTo").prop("disabled", $(event.target).val() === "DISMISSAL"));
-  $("#shiftPeopleModalCrewButton").click(function () {
-    const crewShift = lastSchedule == null ? null : lastSchedule.crewShifts.find(s => s.id === peopleDialogCrewShiftId);
-    bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftPeopleModal")).hide();
-    if (crewShift != null) {
-      openCrew(crewShift.crew.id);
-    }
+  grid.on("dragstart", ".shift-card[draggable=true]", onDragStart);
+  grid.on("dragover", ".shift-card", onDragOver);
+  grid.on("dragleave", ".shift-card", event => $(event.currentTarget).removeClass("drop-target"));
+  grid.on("drop", ".shift-card", onDrop);
+  grid.on("dragend", ".shift-card", () => {
+    draggedShiftId = null;
+    $(".shift-card.dragging, .shift-card.drop-target").removeClass("dragging drop-target");
   });
-  // HACK to allow vis-timeline to work within Bootstrap tabs
-  $("#byLineTab").on('shown.bs.tab', function (event) {
-    byLineTimeline.redraw();
-  })
-  $("#byEmployeeTab").on('shown.bs.tab', function (event) {
-    byEmployeeTimeline.redraw();
-  })
-  // Click on a shift: the lock icon pins/unpins it, the crew name or the people icon opens the people of this
-  // shift.
-  // A click elsewhere only selects the shift (to drag it or remove it with the x).
-  byLineTimeline.on("click", props => {
-    if (props.item == null) {
-      return;
-    }
-    if (clickedOn(props.event, ".pin-toggle")) {
-      togglePinned(props.item);
-    } else if (clickedOn(props.event, ".crew-link, .people-link")) {
-      openShiftPeopleDialog(props.item);
-    }
-  });
-  byLineTimeline.on("doubleClick", onLineDoubleClick);
-  // Click on an employee's name: crew changes and absences; on a shift: the crew in the crew list
-  byEmployeeTimeline.on("click", props => {
-    if (props.what === "group-label" && typeof props.group === "number") {
-      openEmployeeDialog(props.group);
-    } else {
-      openCrewOfItem(byEmployeeItemDataSet, props.item);
-    }
-  });
-  byEmployeeTimeline.on("doubleClick", onEmployeeDoubleClick);
 
   setupAjax();
+  renderAll();
   refreshSchedule();
 });
 
@@ -145,602 +135,1227 @@ function send(method, url, body) {
   return $.ajax({url: url, type: method, data: body == null ? undefined : JSON.stringify(body), dataType: "json"});
 }
 
-// Crew schedule of the version: empty at the start of a month, entered by the user
-function refreshSchedule() {
-  $.getJSON("/crew-schedules/rotation", function (roster) {
-    onRosterChanged(roster);
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    if (xhr.status === 404) {
-      // No version yet (e.g. the crews could not be loaded at startup): show at least the lines
-      refreshLines();
-    }
-    showError("Getting the crew schedule failed.", xhr);
-  });
-}
-
-// Lines without a crew schedule: empty timeline rows
-function refreshLines() {
-  $.getJSON("/crew-schedules/lines", function (lines) {
-    byLineGroupDataSet.clear();
-    byLineItemDataSet.clear();
-    renderLineGroups(lines);
-    renderCrews([]);
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Getting the lines failed.", xhr);
-  });
-}
-
-// Crews of the version with their composition and all their employees, shown below the timeline
-function refreshCrews() {
-  $.getJSON("/crew-schedules/crews", function (crews) {
-    renderCrews(crews);
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Getting the crews failed.", xhr);
-  });
-}
-
-// The whole version: people of every crew shift for the "By employee" tab, and the positions
-function refreshPositions() {
-  return $.getJSON("/crew-schedules", function (schedule) {
-    lastSchedule = schedule;
-    const unassigned = schedule.positions.filter(position => position.employee == null).length;
-    $("#unassignedPositions").text(`Unassigned positions: ${unassigned} / ${schedule.positions.length}`);
-    renderEmployees(schedule);
-    renderShiftPeopleDialog();
-    renderEmployeeDialog();
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Getting the positions failed.", xhr);
-  });
-}
-
-// The server answers every change of the crew schedule with the whole crew schedule
-function onRosterChanged(roster) {
-  renderRoster(roster);
-  refreshPositions();
-  refreshCrews();
-}
-
-function newEmptyMonth() {
-  const month = $("#monthInput").val();
-  if (!month) {
-    showSimpleError("Choose a month first.");
-    return;
-  }
-  if (!confirm(`Start an empty crew schedule for ${month}? Your current schedule version will be replaced.`)) {
-    return;
-  }
-  $.post("/crew-schedules/init?month=" + month, function (roster) {
-    onRosterChanged(roster);
-  }).fail(function (xhr, ajaxOptions, thrownError) {
-    showError("Creating the crew schedule failed.", xhr);
-  });
-}
-
-// Gantt chart of the crew schedule: one row per line, one bar per shift with the crew that works it
-function renderRoster(roster) {
-  $("#version").text(`Session: ${roster.sessionId}, version: ${roster.versionId}`);
-  $("#monthInput").val(roster.month);
-  byLineGroupDataSet.clear();
-  byLineItemDataSet.clear();
-  if (roster.lines.length === 0) {
-    showSimpleError("There are no lines.");
-    return;
-  }
-
-  renderLineGroups(roster.lines.map(lineSchedule => lineSchedule.line));
-  $.each(roster.lines, (index, lineSchedule) => {
-    $.each(lineSchedule.days, (i, day) => {
-      addCrewShiftItem(day.dayShift);
-      addCrewShiftItem(day.nightShift);
-    });
-  });
-  if (shownMonth !== roster.month) {
-    shownMonth = roster.month;
-    setWindow(roster);
-  }
-}
-
-// One timeline row per line, in the given order
-function renderLineGroups(lines) {
-  linesById.clear();
-  $.each(lines, (index, line) => {
-    linesById.set(line.id, line);
-    byLineGroupDataSet.add({id: line.id, order: index, content: $(`<div/>`).append($(`<h5 class="card-title mb-1"/>`).text(line.name)).html()});
-  });
-}
-
-function addCrewShiftItem(crewShift) {
-  if (crewShift == null) {
-    return;
-  }
-  const crew = crewShift.crew;
-  const start = JSJoda.LocalDateTime.parse(crewShift.start);
-  const end = JSJoda.LocalDateTime.parse(crewShift.end);
-  const pin = $(`<span class="pin-toggle fas me-1"/>`)
-    .addClass(crewShift.pinned ? "fa-lock" : "fa-lock-open")
-    .attr("title", crewShift.pinned ? "Pinned. Click to unpin." : "Click to pin.");
-  // People of this shift / people needed; "(-1, +1)" when it differs from the crew (absent or on an absence,
-  // substitutes); "*" when the number of people needed was changed for this shift
-  const changes = [];
-  const missing = crewShift.absentEmployeeIds.length + crewShift.unavailableEmployeeIds.length;
-  if (missing > 0) {
-    changes.push(`\u2212${missing}`);
-  }
-  if (crewShift.extraEmployeeIds.length > 0) {
-    changes.push(`+${crewShift.extraEmployeeIds.length}`);
-  }
-  const people = `${crewShift.employeeIds.length} / ${crewShift.staffCount}${crewShift.roleCounts == null ? "" : "*"} people`
-    + (changes.length === 0 ? "" : ` (${changes.join(", ")})`);
-  const element = $(`<div class="card-body p-2"/>`)
-    .append($(`<h5 class="card-title mb-1"/>`).append(pin)
-      .append($(`<span class="crew-link"/>`).text(crewName(crew))))
-    .append($(`<p class="card-text ms-2 mb-0"/>`).text(`${start.format(timeFormat)} - ${end.format(timeFormat)}, `)
-      .append($(`<span class="people-link"/>`)
-        .append($(`<span class="fas fa-users me-1"/>`)).append($(`<span/>`).text(people))));
-  byLineItemDataSet.add({
-    id: crewShift.id, group: crewShift.line.id, crewId: crew.id,
-    shiftDate: crewShift.date, shiftType: crewShift.type, pinned: crewShift.pinned,
-    editable: !crewShift.pinned, className: crewShift.pinned ? "pinned" : "",
-    content: element.html(),
-    start: crewShift.start, end: crewShift.end,
-    style: "background-color: " + pickColor("crew" + crew.id)
-  });
-}
-
-// Shows one week from today (or from the 1st, if today is not in the month); scroll or zoom to see the rest
-function setWindow(roster) {
-  const month = JSJoda.YearMonth.parse(roster.month);
-  const today = JSJoda.LocalDate.now();
-  const firstDay = JSJoda.YearMonth.from(today).equals(month) ? today : month.atDay(1);
-  byLineTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
-  byEmployeeTimeline.setWindow(firstDay.toString(), firstDay.plusDays(7).toString());
-}
-
-// Shifts start at 08:00 and 20:00: a dragged shift snaps to the nearest start
-function snapToShiftStart(date) {
-  const time = new Date(date);
-  const starts = [-4, 8, 20, 32].map(hours => new Date(time.getFullYear(), time.getMonth(), time.getDate(), hours));
-  return starts.reduce((best, start) => Math.abs(start - time) < Math.abs(best - time) ? start : best);
-}
-
-// The line shift at a time: 08:00-20:00 is the day shift, 20:00-08:00 the night shift of the day it starts
-function slotOf(time) {
-  const date = new Date(time);
-  let day = JSJoda.LocalDate.of(date.getFullYear(), date.getMonth() + 1, date.getDate());
-  const hour = date.getHours();
-  if (hour >= 8 && hour < 20) {
-    return {date: day.toString(), type: "DAY"};
-  }
-  if (hour < 8) {
-    day = day.minusDays(1);
-  }
-  return {date: day.toString(), type: "NIGHT"};
-}
-
-// Double-click on an empty place: add a crew; on a crew shift: give it another crew
-function onLineDoubleClick(props) {
-  if (props.item != null) {
-    const item = byLineItemDataSet.get(props.item);
-    if (item == null) {
-      return;
-    }
-    if (item.pinned) {
-      showSimpleError("This crew shift is pinned. Unpin it first.");
-      return;
-    }
-    openCrewPicker({date: item.shiftDate, type: item.shiftType, lineId: item.group, crewShiftId: item.id, crewId: item.crewId});
-    return;
-  }
-  if (props.what !== "background" || props.group == null || props.time == null) {
-    return;
-  }
-  openCrewPicker({...slotOf(props.time), lineId: props.group, crewShiftId: null, crewId: null});
-}
-
-function openCrewPicker(slot) {
-  if (crewDetailsList.length === 0) {
-    showSimpleError("There are no crews.");
-    return;
-  }
-  pickerSlot = slot;
-  const line = linesById.get(slot.lineId);
-  const shiftName = slot.type === "DAY" ? "day shift (08:00-20:00)" : "night shift (20:00-08:00)";
-  $("#crewShiftModalTitle").text(slot.crewShiftId == null ? "Add a crew" : "Change the crew");
-  $("#crewShiftModalSlot").text(`${line == null ? slot.lineId : line.name}, ${slot.date}, ${shiftName}`);
-
-  // Crews that already work at the same time on another line cannot be chosen
-  const busy = new Map();
-  byLineItemDataSet.forEach(item => {
-    if (item.id !== slot.crewShiftId && item.shiftDate === slot.date && item.shiftType === slot.type) {
-      const line = linesById.get(item.group);
-      busy.set(item.crewId, line == null ? item.group : line.name);
-    }
-  });
-  const select = $("#crewShiftModalCrew").empty();
-  $.each(crewDetailsList, (index, details) => {
-    const crew = details.crew;
-    const option = $(`<option/>`).val(crew.id)
-      .text(crewName(crew) + (busy.has(crew.id) ? ` (works on ${busy.get(crew.id)})` : ""))
-      .prop("disabled", busy.has(crew.id));
-    select.append(option);
-  });
-  const selectable = select.find("option:not(:disabled)");
-  if (slot.crewId != null) {
-    select.val(slot.crewId);
-  } else if (selectable.length > 0) {
-    select.val(selectable.first().val());
-  }
-  bootstrap.Modal.getOrCreateInstance(document.getElementById("crewShiftModal")).show();
-}
-
-function saveCrewShift() {
-  const slot = pickerSlot;
-  const crewId = parseInt($("#crewShiftModalCrew").val());
-  if (slot == null || isNaN(crewId)) {
-    showSimpleError("Choose a crew.");
-    return;
-  }
-  const body = {date: slot.date, type: slot.type, lineId: slot.lineId, crewId: crewId};
-  const request = slot.crewShiftId == null
-    ? send("POST", "/crew-schedules/crew-shifts", body)
-    : send("PUT", crewShiftUrl(slot.crewShiftId), body);
-  request.done(roster => {
-    bootstrap.Modal.getOrCreateInstance(document.getElementById("crewShiftModal")).hide();
-    onRosterChanged(roster);
-  }).fail(xhr => showError("Saving the crew shift failed.", xhr));
-}
-
-// vis-timeline callback after a drag. The timeline is drawn again from the server's answer.
-function moveCrewShift(item, callback) {
-  callback(null);
-  const body = {...slotOf(item.start), lineId: item.group, crewId: item.crewId};
-  send("PUT", crewShiftUrl(item.id), body)
-    .done(onRosterChanged)
-    .fail(xhr => showError("Moving the crew shift failed.", xhr));
-}
-
-// vis-timeline callback for the x of a selected shift
-function removeCrewShift(item, callback) {
-  callback(null);
-  send("DELETE", crewShiftUrl(item.id))
-    .done(onRosterChanged)
-    .fail(xhr => showError("Removing the crew shift failed.", xhr));
-}
-
-function togglePinned(itemId) {
-  const item = byLineItemDataSet.get(itemId);
-  if (item == null) {
-    return;
-  }
-  send("PUT", crewShiftUrl(item.id) + "/pinned", {pinned: !item.pinned})
-    .done(renderRoster)
-    .fail(xhr => showError("Pinning the crew shift failed.", xhr));
-}
-
-function clickedOn(event, selector) {
-  const target = event == null ? null : (event.target || (event.srcEvent && event.srcEvent.target));
-  return target != null && $(target).closest(selector).length > 0;
-}
-
 function crewShiftUrl(crewShiftId) {
   return "/crew-schedules/crew-shifts/" + encodeURIComponent(crewShiftId);
 }
 
-// People dialog of a crew shift ("By line" tab): who works this one shift, with buttons to take an employee
-// off, let an absent employee work again, replace an employee or add one. Only this shift changes, not the crew.
-function openShiftPeopleDialog(crewShiftId) {
-  if (lastSchedule == null || lastSchedule.crewShifts.find(s => s.id === crewShiftId) == null) {
-    return;
-  }
-  peopleDialogCrewShiftId = crewShiftId;
-  renderShiftPeopleDialog();
-  bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftPeopleModal")).show();
+// ---------- Loading ----------
+
+function refreshSchedule() {
+  $.getJSON("/crew-schedules/rotation", onRosterChanged).fail(xhr => {
+    if (xhr.status === 404) {
+      // No version yet (e.g. the crews could not be loaded at startup)
+      lastSchedule = null;
+      lastWarnings = [];
+      renderAll();
+    }
+    showError("Не удалось загрузить график.", xhr);
+  });
 }
 
-// Draws the open people dialog again (also after every change, from the new version)
-function renderShiftPeopleDialog() {
-  if (peopleDialogCrewShiftId == null || lastSchedule == null) {
-    return;
-  }
-  const crewShift = lastSchedule.crewShifts.find(s => s.id === peopleDialogCrewShiftId);
-  if (crewShift == null) {
-    // The crew shift was removed or moved (its id changed)
-    bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftPeopleModal")).hide();
-    return;
-  }
-  const employeesById = new Map(lastSchedule.employees.map(employee => [employee.id, employee]));
-  // Absent employees of this shift are not offered here: they have "Works again"
-  const free = freeEmployees(crewShift.date, crewShift.type).filter(e => !crewShift.absentEmployeeIds.includes(e.id));
-  $("#shiftPeopleModalTitle").text(`People of the crew shift (${crewShift.employeeIds.length} / ${crewShift.staffCount})`);
-  $("#shiftPeopleModalSlot").text(describeShift(crewShift));
+// Every change is answered with the crew schedule (RotationResponse): warnings, shift times, generation.
+// The whole version (people of every shift, employees) is loaded after it.
+function onRosterChanged(roster) {
+  lastWarnings = roster.warnings || [];
+  setShiftTimes(roster.shifts);
+  $("#version").text(`Сессия: ${roster.sessionId}, версия: ${roster.versionId}`);
+  showGeneration(roster.generation);
+  return $.getJSON("/crew-schedules", schedule => {
+    lastSchedule = schedule;
+    shownMonth = schedule.month;
+    setShiftTimes(schedule.shifts);
+    renderAll();
+  }).fail(xhr => showError("Не удалось загрузить график.", xhr));
+}
 
-  // Working employees first (crew members, then substitutes), then the absent ones, then the ones on an absence
-  // (vacation, sick leave, dismissal); by name within each
-  const status = id => crewShift.unavailableEmployeeIds.includes(id) ? 3
-    : crewShift.absentEmployeeIds.includes(id) ? 2 : (crewShift.extraEmployeeIds.includes(id) ? 1 : 0);
-  const ids = [...new Set([...crewShift.employeeIds, ...crewShift.absentEmployeeIds, ...crewShift.unavailableEmployeeIds])]
-    .filter(id => employeesById.has(id))
-    .sort((a, b) => status(a) - status(b) || employeesById.get(a).fullName.localeCompare(employeesById.get(b).fullName));
-  const url = crewShiftUrl(crewShift.id);
-  const rows = ids.map((id, i) => {
-    const employee = employeesById.get(id);
-    const absent = status(id) >= 2;
-    const actions = $(`<td class="text-nowrap"/>`);
+function setShiftTimes(shifts) {
+  if (shifts != null && shifts.length > 0) {
+    shiftTimes = shifts;
+  }
+}
+
+// ---------- Lookups ----------
+
+function emptyIndex() {
+  return {
+    days: [], lines: [], linesById: new Map(), crewsById: new Map(), employeesById: new Map(),
+    shiftsById: new Map(), shiftsBySlot: new Map(), shiftsByDate: new Map(), warningsByShift: new Map(),
+    // employee id -> date -> {worked: [crew shifts], off: [crew shifts they were taken off]}
+    daysByEmployee: new Map(), employeeWarnings: new Map()
+  };
+}
+
+function buildIndex() {
+  index = emptyIndex();
+  const month = JSJoda.YearMonth.parse(shownMonth);
+  for (let day = 1; day <= month.lengthOfMonth(); day++) {
+    index.days.push(month.atDay(day).toString());
+  }
+  if (lastSchedule == null) {
+    return;
+  }
+  index.lines = lastSchedule.lines;
+  lastSchedule.lines.forEach(line => index.linesById.set(line.id, line));
+  lastSchedule.crews.forEach(crew => index.crewsById.set(crew.id, crew));
+  lastSchedule.employees.forEach(employee => {
+    index.employeesById.set(employee.id, employee);
+    index.daysByEmployee.set(employee.id, new Map());
+  });
+  lastSchedule.crewShifts.forEach(shift => {
+    index.shiftsById.set(shift.id, shift);
+    index.shiftsBySlot.set(slotKey(shift.line.id, shift.date, shift.type), shift);
+    pushTo(index.shiftsByDate, shift.date, shift);
+    shift.employeeIds.forEach(id => employeeDay(id, shift.date).worked.push(shift));
+    shift.absentEmployeeIds.forEach(id => employeeDay(id, shift.date).off.push(shift));
+  });
+  lastWarnings.forEach(warning => pushTo(index.warningsByShift, warning.crewShiftId, warning));
+  // Rest warnings of an employee: their own, and the ones of their crew on shifts they work as a member
+  // (the server does not repeat a crew warning for every member)
+  lastWarnings.forEach(warning => {
+    const shift = index.shiftsById.get(warning.crewShiftId);
+    if (warning.employeeId != null) {
+      pushTo(index.employeeWarnings, warning.employeeId, warning);
+    } else if (shift != null) {
+      shift.employeeIds.filter(id => !shift.extraEmployeeIds.includes(id))
+        .forEach(id => pushTo(index.employeeWarnings, id, warning));
+    }
+  });
+}
+
+function employeeDay(employeeId, date) {
+  let days = index.daysByEmployee.get(employeeId);
+  if (days == null) {
+    days = new Map();
+    index.daysByEmployee.set(employeeId, days);
+  }
+  if (!days.has(date)) {
+    days.set(date, {worked: [], off: []});
+  }
+  return days.get(date);
+}
+
+function pushTo(map, key, value) {
+  if (!map.has(key)) {
+    map.set(key, []);
+  }
+  map.get(key).push(value);
+}
+
+function slotKey(lineId, date, type) {
+  return `${lineId}|${date}|${type}`;
+}
+
+function isDeficit(shift) {
+  return shift.employeeIds.length < shift.staffCount;
+}
+
+// ---------- Drawing ----------
+
+function renderAll() {
+  closeLineMenu();
+  buildIndex();
+  renderHeader();
+  renderLegend();
+  renderGrid();
+  renderStats();
+  renderDrawer();
+}
+
+function renderHeader() {
+  $("#monthLabel").text(monthTitle(shownMonth));
+  $("#viewLinesButton").toggleClass("active", view === "lines").attr("aria-pressed", String(view === "lines"));
+  $("#viewEmployeesButton").toggleClass("active", view === "employees")
+    .attr("aria-pressed", String(view === "employees"));
+  const warnings = lastWarnings.length;
+  const deficits = lastSchedule == null ? 0 : lastSchedule.crewShifts.filter(isDeficit).length;
+  $("#warningChip").toggleClass("active", warnings > 0).prop("disabled", warnings === 0)
+    .attr("title", warnings > 0 ? "Показать первое нарушение" : "")
+    .find(".text").text(`${warnings} ${plural(warnings, "нарушение", "нарушения", "нарушений")} отдыха`);
+  $("#deficitChip").toggleClass("active", deficits > 0).prop("disabled", deficits === 0)
+    .attr("title", deficits > 0 ? "Показать первую смену с дефицитом" : "")
+    .find(".text").text(`${deficits} ${plural(deficits, "смена", "смены", "смен")} с дефицитом`);
+}
+
+function renderLegend() {
+  const items = [
+    legendItem("Д", "code-day", shiftLabel("DAY")),
+    legendItem("Н", "code-night", shiftLabel("NIGHT")),
+    legendItem("О", "code-sleep", "Отсыпной"),
+    legendItem("В", "code-off", "Выходной"),
+    ...Object.values(ABSENCES).map(absence => legendItem(absence.code, absence.css, absence.name))
+  ];
+  const hint = view === "lines"
+    ? "Нажмите на смену — подробности. Перетащите смену на смену той же линии и типа — обмен бригадами, на пустую — перенос."
+    : "Нажмите на сотрудника — карточка сотрудника, на клетку — изменить его смену в этот день.";
+  $("#legend").html(items.join("") + `<span class="legend-hint">${escapeHtml(hint)}</span>`);
+}
+
+function legendItem(code, css, text) {
+  return `<span class="legend-item"><span class="code ${css}">${escapeHtml(code)}</span>${escapeHtml(text)}</span>`;
+}
+
+function renderGrid() {
+  const container = $("#gridScroll");
+  const scroll = {left: container.scrollLeft(), top: container.scrollTop()};
+  if (lastSchedule == null) {
+    container.html(`<div class="empty-state">Нет версии графика. Нажмите «Новый пустой месяц».</div>`);
+    return;
+  }
+  if (lastSchedule.lines.length === 0) {
+    container.html(`<div class="empty-state">В этом месяце нет линий.</div>`);
+    return;
+  }
+  container.html(view === "lines" ? linesGridHtml() : employeesGridHtml());
+  container.scrollLeft(scroll.left).scrollTop(scroll.top);
+  if (drawer != null && drawer.kind === "shift") {
+    container.find(`.shift-card[data-id="${cssEscape(drawer.id)}"]`).addClass("selected");
+  }
+}
+
+// ----- "По линиям" -----
+
+function linesGridHtml() {
+  const today = JSJoda.LocalDate.now().toString();
+  const head = index.days.map(date => {
+    const shifts = index.shiftsByDate.get(date) || [];
+    const people = shifts.reduce((sum, shift) => sum + shift.employeeIds.length, 0);
+    const needed = shifts.reduce((sum, shift) => sum + shift.staffCount, 0);
+    const peopleText = shifts.length === 0 ? "—" : `${people} / ${needed}`;
+    return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col">
+      <span class="day-number">${dayNumber(date)}</span><span class="day-week">${weekday(date)}</span>
+      <span class="day-people${people < needed ? " short" : ""}" title="Людей во всех сменах дня / нужно">${peopleText}</span>
+    </th>`;
+  }).join("");
+  const rows = index.lines.map(line => {
+    const cells = index.days.map(date => `<td class="line-cell${date === today ? " today" : ""}">`
+      + shiftCardHtml(line, date, "DAY") + shiftCardHtml(line, date, "NIGHT") + `</td>`).join("");
+    const code = line.name === line.id ? "" : `<div class="line-code">${escapeHtml(line.id)}</div>`;
+    const menu = `<button type="button" class="line-menu-button" data-line="${escapeHtml(line.id)}" aria-haspopup="menu"
+      aria-label="Меню линии ${escapeHtml(line.name)}" title="Меню линии"><span class="fas fa-ellipsis-h"></span></button>`;
+    return `<tr><th class="sticky-col line-head" scope="row">${menu}<div class="line-name">${escapeHtml(line.name)}</div>${code}</th>${cells}</tr>`;
+  }).join("");
+  return `<table class="grid-table"><thead><tr><th class="sticky-col line-head" scope="col">Линия</th>${head}</tr></thead>`
+    + `<tbody>${rows}</tbody></table>`;
+}
+
+function shiftCardHtml(line, date, type) {
+  const shift = index.shiftsBySlot.get(slotKey(line.id, date, type));
+  const typeClass = type === "DAY" ? "day" : "night";
+  if (shift == null) {
+    const label = `${type === "DAY" ? "Дневная" : "Ночная"} смена ${formatDate(date)}: нет бригады. Нажмите, чтобы поставить.`;
+    return `<button type="button" class="shift-card empty" data-line="${escapeHtml(line.id)}" data-date="${date}"
+      data-type="${type}" title="${escapeHtml(label)}"><span class="fas fa-plus"></span>${type === "DAY" ? "Д" : "Н"}</button>`;
+  }
+  const warnings = index.warningsByShift.get(shift.id) || [];
+  const classes = ["shift-card", typeClass];
+  if (isDeficit(shift)) {
+    classes.push("deficit");
+  }
+  if (warnings.length > 0) {
+    classes.push("rest-warning");
+  }
+  if (shift.pinned) {
+    classes.push("pinned");
+  }
+  const tooltip = [`${crewName(shift.crew)}, ${shiftLabel(type)}, ${formatDate(date)}`,
+    `Людей: ${shift.employeeIds.length} из ${shift.staffCount}`,
+    ...(shift.pinned ? ["Закреплена"] : []),
+    ...warnings.map(warning => warning.message)].join("\n");
+  return `<button type="button" class="${classes.join(" ")}" data-id="${escapeHtml(shift.id)}"
+      draggable="${!shift.pinned}" title="${escapeHtml(tooltip)}">
+    <span class="dot"></span><span class="crew">${escapeHtml(crewName(shift.crew))}</span><span class="time">${timeOf(type).start}</span>
+    ${shift.pinned ? `<span class="pin fas fa-lock" aria-label="Закреплена"></span>` : ""}
+    <span class="meta"><span>${type === "DAY" ? "Дневная" : "Ночная"}</span>
+      <span class="people"><span class="fas fa-user-friends me-1"></span>${shift.employeeIds.length}/${shift.staffCount}</span></span>
+  </button>`;
+}
+
+// ----- Drag and drop: onto a card of the same line and shift type = swap the crews, onto an empty card = move -----
+
+function onDragStart(event) {
+  draggedShiftId = $(event.currentTarget).data("id");
+  event.originalEvent.dataTransfer.effectAllowed = "move";
+  event.originalEvent.dataTransfer.setData("text/plain", draggedShiftId);
+  $(event.currentTarget).addClass("dragging");
+}
+
+function onDragOver(event) {
+  const target = $(event.currentTarget);
+  if (dropAction(target) != null) {
+    event.preventDefault();
+    event.originalEvent.dataTransfer.dropEffect = "move";
+    target.addClass("drop-target");
+  }
+}
+
+function onDrop(event) {
+  event.preventDefault();
+  const target = $(event.currentTarget).removeClass("drop-target");
+  const action = dropAction(target);
+  const source = index.shiftsById.get(draggedShiftId);
+  draggedShiftId = null;
+  if (action === "swap") {
+    swapCrews(source, index.shiftsById.get(target.data("id")));
+  } else if (action === "move") {
+    moveCrewShift(source, {date: target.data("date"), type: target.data("type"), lineId: String(target.data("line"))});
+  }
+}
+
+// "swap", "move" or null (not allowed)
+function dropAction(target) {
+  const source = draggedShiftId == null ? null : index.shiftsById.get(draggedShiftId);
+  if (source == null || source.pinned) {
+    return null;
+  }
+  if (target.hasClass("empty")) {
+    return "move";
+  }
+  const other = index.shiftsById.get(target.data("id"));
+  if (other == null || other.id === source.id || other.pinned) {
+    return null;
+  }
+  return other.line.id === source.line.id && other.type === source.type ? "swap" : null;
+}
+
+// Two PUT calls: a gets b's crew, then b gets a's crew. If the second one fails, the version is loaded again.
+function swapCrews(a, b) {
+  const body = (shift, crewId) => ({date: shift.date, type: shift.type, lineId: shift.line.id, crewId: crewId});
+  send("PUT", crewShiftUrl(a.id), body(a, b.crew.id))
+    .done(() => send("PUT", crewShiftUrl(b.id), body(b, a.crew.id))
+      .done(onRosterChanged)
+      .fail(xhr => {
+        showError("Обмен бригадами не завершён: вторая смена не изменена. График загружен заново.", xhr);
+        refreshSchedule();
+      }))
+    .fail(xhr => showError("Не удалось поменять бригады местами.", xhr));
+}
+
+function moveCrewShift(shift, slot) {
+  send("PUT", crewShiftUrl(shift.id), {...slot, crewId: shift.crew.id})
+    .done(roster => {
+      if (drawer != null && drawer.kind === "shift" && drawer.id === shift.id) {
+        drawer.id = `${slot.date}-${slot.type}-${slot.lineId}`; // The id of the moved crew shift
+      }
+      onRosterChanged(roster);
+    })
+    .fail(xhr => showError("Не удалось перенести смену.", xhr));
+}
+
+// ----- "По сотрудникам" -----
+
+function employeesGridHtml() {
+  const today = JSJoda.LocalDate.now().toString();
+  const head = index.days.map(date => `<th class="emp-day-head${weekendClass(date)}${date === today ? " today" : ""}"
+    scope="col">${dayNumber(date)}<span class="day-week">${weekday(date)}</span></th>`).join("");
+  const employeesByCrew = new Map();
+  lastSchedule.employees.forEach(employee => pushTo(employeesByCrew, employee.crew.id, employee));
+  const rows = [...lastSchedule.crews].sort((a, b) => a.id - b.id).map(crew => {
+    const employees = (employeesByCrew.get(crew.id) || []).sort(byPositionAndName);
+    const line = crew.lineId == null ? null : index.linesById.get(crew.lineId);
+    const lineText = line == null ? (crew.lineId || "без линии") : line.name;
+    const count = `${employees.length} ${plural(employees.length, "сотрудник", "сотрудника", "сотрудников")}`;
+    const crewRow = `<tr class="crew-row"><td class="sticky-col crew-row-label">${escapeHtml(crewName(crew))}
+      <span class="muted">${escapeHtml(lineText)} · ${count}</span></td><td colspan="${index.days.length}"></td></tr>`;
+    return crewRow + employees.map(employee => employeeRowHtml(employee, today)).join("");
+  }).join("");
+  return `<table class="grid-table"><thead><tr><th class="sticky-col emp-head" scope="col">Сотрудник</th>${head}</tr></thead>`
+    + `<tbody>${rows}</tbody></table>`;
+}
+
+function employeeRowHtml(employee, today) {
+  const totals = monthTotals(employee);
+  const label = `<th class="sticky-col emp-label" scope="row" data-employee="${employee.id}" title="Открыть карточку сотрудника">
+    <span class="emp-name">${escapeHtml(employee.fullName)}</span>
+    <span class="emp-sub">таб. № ${employee.id} · ${totals.shifts} ${plural(totals.shifts, "смена", "смены", "смен")}, ${formatHours(totals.hours)} ч</span></th>`;
+  const warned = new Set((index.employeeWarnings.get(employee.id) || []).map(warning => warning.crewShiftId));
+  const cells = index.days.map(date => {
+    const cell = employeeCell(employee, date);
+    const marker = cell.shifts.some(shift => warned.has(shift.id)) ? `<span class="warn-marker"></span>` : "";
+    return `<td class="emp-cell${date === today ? " today" : ""}" data-employee="${employee.id}" data-date="${date}"
+      title="${escapeHtml(cell.title)}"><span class="code ${cell.css}">${escapeHtml(cell.code)}</span>${marker}</td>`;
+  }).join("");
+  return `<tr>${label}${cells}</tr>`;
+}
+
+// What an employee does on a date: works (Д / Н, dashed = substitute), is absent (Б, ОТ, У, ПР), was taken off a
+// shift of the crew (crossed out), otherwise О (after a night shift) or В
+function employeeCell(employee, date) {
+  const day = index.daysByEmployee.get(employee.id)?.get(date) || {worked: [], off: []};
+  if (day.worked.length > 0) {
+    const shifts = [...day.worked].sort((a, b) => a.type.localeCompare(b.type));
+    const substitute = shifts.some(shift => shift.extraEmployeeIds.includes(employee.id));
+    return {
+      shifts: shifts,
+      code: shifts.map(shift => shift.type === "DAY" ? "Д" : "Н").join(""),
+      css: (shifts[0].type === "DAY" ? "code-day" : "code-night") + (substitute ? " substitute" : ""),
+      title: shifts.map(shift => `${shiftLabel(shift.type)}, ${shift.line.name}, бригада ${crewName(shift.crew)}`
+        + (shift.extraEmployeeIds.includes(employee.id) ? " (замена)" : "")).concat(warningsText(employee, shifts)).join("\n")
+    };
+  }
+  const absence = absenceOn(employee, date);
+  if (absence != null) {
+    const type = ABSENCES[absence.type] || ABSENCES.OTHER;
+    return {shifts: [], code: type.code, css: type.css, title: describeAbsence(absence)};
+  }
+  if (day.off.length > 0) {
+    const shift = day.off[0];
+    return {
+      shifts: [], code: shift.type === "DAY" ? "Д" : "Н",
+      css: (shift.type === "DAY" ? "code-day" : "code-night") + " not-working",
+      title: `Снят со смены: ${shiftLabel(shift.type)}, ${shift.line.name}. Нажмите, чтобы вернуть.`
+    };
+  }
+  const previous = JSJoda.LocalDate.parse(date).minusDays(1).toString();
+  const afterNight = (index.daysByEmployee.get(employee.id)?.get(previous)?.worked || []).some(s => s.type === "NIGHT");
+  return afterNight
+    ? {shifts: [], code: "О", css: "code-sleep", title: "Отсыпной после ночной смены"}
+    : {shifts: [], code: "В", css: "code-off", title: "Выходной. Нажмите, чтобы добавить в смену бригады."};
+}
+
+function warningsText(employee, shifts) {
+  const ids = new Set(shifts.map(shift => shift.id));
+  return (index.employeeWarnings.get(employee.id) || []).filter(w => ids.has(w.crewShiftId)).map(w => w.message);
+}
+
+// Crew shifts, DAY / NIGHT and hours the employee works in the month (hours from the shift times)
+function monthTotals(employee) {
+  const totals = {shifts: 0, day: 0, night: 0, hours: 0};
+  (index.daysByEmployee.get(employee.id) || new Map()).forEach(day => day.worked.forEach(shift => {
+    totals.shifts++;
+    totals[shift.type === "DAY" ? "day" : "night"]++;
+    totals.hours += shift.hours;
+  }));
+  return totals;
+}
+
+function onEmployeeCellClick(employeeId, date) {
+  const employee = index.employeesById.get(employeeId);
+  if (employee == null) {
+    return;
+  }
+  const day = index.daysByEmployee.get(employeeId)?.get(date) || {worked: [], off: []};
+  if (day.worked.length > 0) {
+    openShiftEmployeeDialog("works", employeeId, day.worked[0].id);
+  } else if (absenceOn(employee, date) != null) {
+    openDrawer("employee", employeeId);
+  } else if (day.off.length > 0) {
+    openShiftEmployeeDialog("absent", employeeId, day.off[0].id);
+  } else {
+    const shifts = index.shiftsByDate.get(date) || [];
+    if (shifts.length === 0) {
+      showSimpleError(`${formatDate(date)} нет смен бригад. Сначала поставьте бригаду в виде «По линиям».`);
+      return;
+    }
+    openShiftEmployeeDialog("add", employeeId, null, shifts);
+  }
+}
+
+// ----- Footer -----
+
+function renderStats() {
+  const shifts = lastSchedule == null ? [] : lastSchedule.crewShifts;
+  const stats = [
+    ["fas fa-industry", "Линий в версии", lastSchedule == null ? 0 : lastSchedule.lines.length],
+    ["fas fa-calendar-check", "Смен бригад в месяце", shifts.length],
+    ["fas fa-user-minus", "Смен с дефицитом", shifts.filter(isDeficit).length],
+    ["fas fa-exclamation-triangle", "Нарушений отдыха", lastWarnings.length]
+  ];
+  $("#stats").html(stats.map(([icon, label, value]) => `<div class="panel stat">
+    <span class="stat-icon"><span class="${icon}"></span></span>
+    <div><div class="label">${escapeHtml(label)}</div><div class="value num">${value}</div></div></div>`).join(""));
+}
+
+// ----- View switch and chips -----
+
+function setView(newView) {
+  view = newView;
+  try {
+    sessionStorage.setItem("crewView", view);
+  } catch (e) {
+    // No sessionStorage: the view is not remembered
+  }
+  renderAll();
+}
+
+function loadView() {
+  try {
+    return sessionStorage.getItem("crewView") === "employees" ? "employees" : "lines";
+  } catch (e) {
+    return "lines";
+  }
+}
+
+// Scrolls to the first crew shift with a rest warning or a deficit (in "По сотрудникам": the first cell with a
+// rest warning; a deficit is only shown in "По линиям")
+function scrollToFirst(kind) {
+  if (kind === "deficit" && view !== "lines") {
+    setView("lines");
+  }
+  let element = kind === "deficit"
+    ? $("#gridScroll .shift-card.deficit").first()
+    : (view === "lines" ? $("#gridScroll .shift-card.rest-warning").first() : $("#gridScroll .warn-marker").first().parent());
+  if (element.length === 0 && kind === "warning" && view !== "lines") {
+    setView("lines");
+    element = $("#gridScroll .shift-card.rest-warning").first();
+  }
+  if (element.length === 0) {
+    return;
+  }
+  element[0].scrollIntoView({behavior: "smooth", block: "center", inline: "center"});
+  element.removeClass("flash");
+  setTimeout(() => element.addClass("flash"), 10);
+}
+
+// ---------- Drawer ----------
+
+function openDrawer(kind, id) {
+  drawer = {kind: kind, id: id};
+  renderGrid();
+  renderDrawer();
+}
+
+function closeDrawer() {
+  drawer = null;
+  $("#gridScroll .shift-card.selected").removeClass("selected");
+  $("#drawer").prop("hidden", true);
+}
+
+function renderDrawer() {
+  if (drawer == null || lastSchedule == null) {
+    $("#drawer").prop("hidden", true);
+    return;
+  }
+  const found = drawer.kind === "shift"
+    ? renderShiftDrawer(index.shiftsById.get(drawer.id))
+    : renderEmployeeDrawer(index.employeesById.get(drawer.id));
+  if (!found) {
+    closeDrawer(); // The crew shift was removed (or moved by someone else) or the employee is gone
+    return;
+  }
+  $("#drawer").prop("hidden", false);
+}
+
+// ----- One crew shift: line, date, shift, crew, people with the existing actions, change crew, pin, remove -----
+
+function renderShiftDrawer(shift) {
+  if (shift == null) {
+    return false;
+  }
+  const typeClass = shift.type === "DAY" ? "day" : "night";
+  $("#drawerHeader").empty()
+    .append($(`<div class="d-flex flex-wrap gap-2 align-items-center mb-2"/>`)
+      .append($(`<span class="pill ${typeClass}"/>`).text(shiftLabel(shift.type)))
+      .append($(`<span class="text-muted"/>`).text(`${formatDate(shift.date)}, ${weekday(shift.date)}`)))
+    .append($(`<h2 class="drawer-title"/>`).text(shift.line.name))
+    .append($(`<div class="drawer-subtitle"/>`).text(`Бригада ${crewName(shift.crew)}`
+      + (shift.line.name === shift.line.id ? "" : ` · ${shift.line.id}`)));
+
+  const body = $("#drawerBody").empty();
+  const deficit = isDeficit(shift);
+  body.append($(`<div class="drawer-section"/>`).append($(`<div class="stat-boxes"/>`)
+    .append(statBox("Людей", `${shift.employeeIds.length} / ${shift.staffCount}`, deficit ? "не хватает" : "", deficit))
+    .append(statBox("Часы", formatHours(shift.hours), `${timeOf(shift.type).start}–${timeOf(shift.type).end}`))
+    .append(statBox("Закреплена", shift.pinned ? "Да" : "Нет", ""))));
+
+  const warnings = index.warningsByShift.get(shift.id) || [];
+  if (warnings.length > 0) {
+    body.append($(`<div class="drawer-section"/>`).append($(`<h6/>`).text("Нарушения отдыха"))
+      .append($(`<ul class="warning-list"/>`).append(warnings.map(w => $(`<li/>`).text(w.message)))));
+  }
+
+  // Crew, pin, remove
+  const crewSelect = $(`<select class="form-select form-select-sm" id="drawerCrew" aria-label="Бригада"/>`);
+  fillCrewSelect(crewSelect, {date: shift.date, type: shift.type, lineId: shift.line.id, crewShiftId: shift.id},
+    shift.crew.id);
+  const crewSection = $(`<div class="drawer-section"/>`).append($(`<h6/>`).text("Бригада"))
+    .append($(`<div class="input-group input-group-sm mb-2"/>`).append(crewSelect)
+      .append($(`<button type="button" class="btn btn-outline-dark"/>`).text("Сменить")
+        .prop("disabled", shift.pinned)
+        .click(() => changeCrew(shift, parseInt(crewSelect.val())))))
+    .append($(`<div class="d-flex gap-2"/>`)
+      .append($(`<button type="button" class="btn btn-sm btn-outline-dark"/>`)
+        .append($(`<span class="fas me-1"/>`).addClass(shift.pinned ? "fa-lock-open" : "fa-lock"))
+        .append(document.createTextNode(shift.pinned ? "Открепить" : "Закрепить"))
+        .click(() => setPinned(shift, !shift.pinned)))
+      .append($(`<button type="button" class="btn btn-sm btn-outline-danger"/>`)
+        .append($(`<span class="fas fa-trash-alt me-1"/>`)).append(document.createTextNode("Удалить смену"))
+        .prop("disabled", shift.pinned)
+        .click(() => removeCrewShift(shift))));
+  if (shift.pinned) {
+    crewSelect.prop("disabled", true);
+    crewSection.append($(`<p class="text-muted small mt-2 mb-0"/>`)
+      .text("Закреплённую смену нельзя перенести, удалить или отдать другой бригаде. Людей менять можно."));
+  }
+  body.append(crewSection);
+  body.append(shiftPeopleSection(shift));
+  return true;
+}
+
+// People of one crew shift: take off, works again, replace, add. Only this shift changes, not the crew.
+function shiftPeopleSection(shift) {
+  const free = freeEmployees(shift.date, shift.type).filter(e => !shift.absentEmployeeIds.includes(e.id));
+  // Working employees first (crew members, then substitutes), then the ones taken off, then the absent ones
+  const status = id => shift.unavailableEmployeeIds.includes(id) ? 3
+    : shift.absentEmployeeIds.includes(id) ? 2 : (shift.extraEmployeeIds.includes(id) ? 1 : 0);
+  const ids = [...new Set([...shift.employeeIds, ...shift.absentEmployeeIds, ...shift.unavailableEmployeeIds])]
+    .filter(id => index.employeesById.has(id))
+    .sort((a, b) => status(a) - status(b)
+      || byPositionAndName(index.employeesById.get(a), index.employeesById.get(b)));
+  const url = crewShiftUrl(shift.id);
+  const section = $(`<div class="drawer-section"/>`)
+    .append($(`<h6/>`).text(`Люди смены (${shift.employeeIds.length} из ${shift.staffCount})`))
+    .append($(`<p class="text-muted small"/>`).text("Изменения касаются только этой смены, не бригады."));
+  if (ids.length === 0) {
+    section.append($(`<p class="text-muted"/>`).text("В этой смене никто не работает."));
+  }
+  ids.forEach(id => {
+    const employee = index.employeesById.get(id);
+    const inactive = status(id) >= 2;
+    const actions = $(`<div class="person-actions"/>`);
     let statusText;
     if (status(id) === 3) {
-      const absence = absenceOn(employee, crewShift.date);
-      statusText = absence == null ? "absent" : absenceName(absence.type);
-      actions.append($(`<button type="button" class="btn btn-sm btn-outline-secondary"/>`).text("Absences...")
-        .click(() => {
-          bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftPeopleModal")).hide();
-          openEmployeeDialog(id);
-        }));
-    } else if (absent) {
-      statusText = "absent";
-      actions.append($(`<button type="button" class="btn btn-sm btn-outline-primary"/>`).text("Works again")
+      const absence = absenceOn(employee, shift.date);
+      statusText = absence == null ? "отсутствует" : (ABSENCES[absence.type] || ABSENCES.OTHER).name.toLowerCase();
+      actions.append($(`<button type="button" class="btn btn-sm btn-outline-secondary"/>`).text("Отсутствия")
+        .click(() => openDrawer("employee", id)));
+    } else if (inactive) {
+      statusText = "снят с этой смены";
+      actions.append($(`<button type="button" class="btn btn-sm btn-outline-primary"/>`).text("Вернуть")
         .click(() => changeShiftPeople(send("PUT", `${url}/employees/${id}`))));
     } else {
-      statusText = status(id) === 1 ? `substitute (${crewName(crewOn(employee, crewShift.date))})` : "crew";
-      const replace = $(`<select class="form-select form-select-sm d-inline-block w-auto me-1"/>`)
-        .append($(`<option value=""/>`).text("Replace by..."))
-        .append(free.map(other => employeeOption(other, crewShift.date)))
+      statusText = status(id) === 1 ? `замена из бригады ${crewName(crewOn(employee, shift.date))}` : "бригада";
+      actions.append($(`<select class="form-select form-select-sm" aria-label="Заменить"/>`)
+        .append($(`<option value=""/>`).text("Заменить…"))
+        .append(free.map(other => employeeOption(other, shift.date)))
         .prop("disabled", free.length === 0)
         .on("change", event => {
           const substituteId = parseInt($(event.target).val());
           if (!isNaN(substituteId)) {
             changeShiftPeople(send("POST", `${url}/replacements`, {employeeId: id, substituteId: substituteId}));
           }
-        });
-      actions.append(replace)
-        .append($(`<button type="button" class="btn btn-sm btn-outline-danger"/>`).text("Take off")
+        }))
+        .append($(`<button type="button" class="btn btn-sm btn-outline-danger" title="Снять с этой смены"/>`)
+          .append($(`<span class="fas fa-user-minus"/>`)).attr("aria-label", "Снять с этой смены")
           .click(() => changeShiftPeople(send("DELETE", `${url}/employees/${id}`))));
     }
-    return $(`<tr/>`).toggleClass("text-muted", absent)
-      .append($(`<td/>`).text(i + 1))
-      .append($(`<td/>`).text(employee.fullName).toggleClass("text-decoration-line-through", absent))
-      .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", ")))
-      .append($(`<td/>`).text(statusText))
-      .append(actions);
+    section.append($(`<div class="person"/>`).toggleClass("inactive", inactive)
+      .append($(`<span class="avatar"/>`).text(initials(employee.fullName)))
+      .append($(`<div class="person-info"/>`)
+        .append($(`<div class="person-name employee-link"/>`).text(employee.fullName)
+          .attr("title", "Открыть карточку сотрудника").css("cursor", "pointer")
+          .click(() => openDrawer("employee", id)))
+        .append($(`<div class="person-status"/>`).text(statusText)))
+      .append(actions));
   });
-  $("#shiftPeopleModalList").empty().append(rows.length === 0
-    ? $(`<p class="text-muted mb-0"/>`).text("Nobody works this shift.")
-    : $(`<table class="table table-sm align-middle mb-0"/>`)
-      .append($(`<thead/>`).append($(`<tr/>`)
-        .append($(`<th style="width: 2rem"/>`).text("#"))
-        .append($(`<th/>`).text("Full name"))
-        .append($(`<th/>`).text("Roles"))
-        .append($(`<th/>`).text("In this shift"))
-        .append($(`<th/>`))))
-      .append($(`<tbody/>`).append(rows)));
-
-  $("#shiftPeopleModalAdd").empty()
-    .append(free.length === 0 ? $(`<option value=""/>`).text("Nobody is free at that time") : null)
-    .append(free.map(other => employeeOption(other, crewShift.date)));
-  $("#shiftPeopleModalAddButton").prop("disabled", free.length === 0);
-  renderShiftComposition(crewShift);
+  const addSelect = $(`<select class="form-select form-select-sm" aria-label="Добавить сотрудника"/>`)
+    .append(free.length === 0 ? $(`<option value=""/>`).text("В это время свободных нет") : null)
+    .append(free.map(other => employeeOption(other, shift.date)));
+  section.append($(`<label class="form-label small mt-3 mb-1"/>`).text("Добавить сотрудника в эту смену"))
+    .append($(`<div class="input-group input-group-sm"/>`).append(addSelect)
+      .append($(`<button type="button" class="btn btn-dark"/>`).prop("disabled", free.length === 0)
+        .append($(`<span class="fas fa-user-plus me-1"/>`)).append(document.createTextNode("Добавить"))
+        .click(() => {
+          const employeeId = parseInt(addSelect.val());
+          if (!isNaN(employeeId)) {
+            changeShiftPeople(send("PUT", `${url}/employees/${employeeId}`));
+          }
+        })));
+  return section;
 }
 
-// People needed per role in this shift: the crew's numbers (PLR_RLBR), or the numbers changed for this shift only
-function renderShiftComposition(crewShift) {
-  const details = crewDetailsList.find(d => d.crew.id === crewShift.crew.id);
-  const crewCounts = new Map((details == null ? [] : details.roles).map(roleCount => [roleCount.role.id, roleCount.count]));
-  const shiftCounts = crewShift.roleCounts == null ? crewCounts
-    : new Map(Object.entries(crewShift.roleCounts).map(([roleId, count]) => [parseInt(roleId), count]));
-  const rolesById = new Map(lastSchedule.roles.map(role => [role.id, role]));
-  const roleIds = [...new Set([...crewCounts.keys(), ...shiftCounts.keys()])].filter(id => rolesById.has(id))
-    .sort((a, b) => rolesById.get(a).name.localeCompare(rolesById.get(b).name));
-
-  $("#shiftPeopleModalCompositionText").text(crewShift.roleCounts == null
-    ? "The crew's numbers. Change them here for this shift only."
-    : "Changed for this shift only (the crew's numbers are in the second column).");
-  $("#shiftPeopleModalComposition").empty().append($(`<table class="table table-sm align-middle mb-0 w-auto"/>`)
-    .append($(`<thead/>`).append($(`<tr/>`)
-      .append($(`<th/>`).text("Role"))
-      .append($(`<th/>`).text("Crew"))
-      .append($(`<th/>`).text("This shift"))))
-    .append($(`<tbody/>`).append(roleIds.map(id =>
-      compositionRow(rolesById.get(id), crewCounts.get(id) || 0, shiftCounts.get(id) || 0)))));
-  $("#shiftPeopleModalAddRole").empty()
-    .append($(`<option value=""/>`).text("Add a role..."))
-    .append(lastSchedule.roles.filter(role => !roleIds.includes(role.id))
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map(role => $(`<option/>`).val(role.id).text(role.name)));
-  $("#shiftPeopleModalCompositionReset").prop("disabled", crewShift.roleCounts == null);
-}
-
-function compositionRow(role, crewCount, shiftCount) {
-  return $(`<tr/>`)
-    .append($(`<td/>`).text(role.name))
-    .append($(`<td/>`).text(crewCount))
-    .append($(`<td/>`).append($(`<input type="number" min="0" max="50" class="form-control form-control-sm role-count"/>`)
-      .attr("data-role-id", role.id).val(shiftCount)));
-}
-
-function saveShiftComposition() {
-  const roles = [];
-  let valid = true;
-  $("#shiftPeopleModalComposition input[data-role-id]").each((i, input) => {
-    const count = Number($(input).val());
-    if (!Number.isInteger(count) || count < 0) {
-      valid = false;
-    }
-    roles.push({roleId: parseInt($(input).attr("data-role-id")), count: count});
-  });
-  if (!valid) {
-    showSimpleError("The number of people must be a whole number, 0 or more.");
-    return;
-  }
-  changeShiftPeople(send("PUT", `${crewShiftUrl(peopleDialogCrewShiftId)}/composition`, {roles: roles}));
-}
-
-// The dialog stays open; it is drawn again when the new version is loaded (refreshPositions)
 function changeShiftPeople(request) {
-  request.done(onRosterChanged)
-    .fail(xhr => {
-      showError("Changing the people of the crew shift failed.", xhr);
-      renderShiftPeopleDialog();
-    });
-}
-
-// Gantt chart by employee: employees grouped by their crew (sorted by number), sorted by name within the crew.
-// A bar is a crew shift the employee works: with their own crew, or as a substitute in another crew (dashed).
-// A grey bar is a shift of their crew they do not work (absent). The label has the roles, and the shifts and
-// hours of the month. Double-click a bar to take the employee off the shift or replace them, or an empty place
-// to add the employee to a crew shift at that time.
-function renderEmployees(schedule) {
-  byEmployeeGroupDataSet.clear();
-  byEmployeeItemDataSet.clear();
-
-  const employeesById = new Map(schedule.employees.map(employee => [employee.id, employee]));
-  const employeesByCrew = new Map();
-  $.each(schedule.employees, (index, employee) => {
-    if (!employeesByCrew.has(employee.crew.id)) {
-      employeesByCrew.set(employee.crew.id, {crew: employee.crew, employees: []});
-    }
-    employeesByCrew.get(employee.crew.id).employees.push(employee);
-  });
-  const shiftCount = new Map();
-  const hourCount = new Map();
-  $.each(schedule.crewShifts, (index, crewShift) => {
-    const hours = (new Date(crewShift.end) - new Date(crewShift.start)) / (1000 * 60 * 60);
-    crewShift.employeeIds.forEach(id => {
-      shiftCount.set(id, (shiftCount.get(id) || 0) + 1);
-      hourCount.set(id, (hourCount.get(id) || 0) + hours);
-    });
-  });
-
-  let order = 0;
-  [...employeesByCrew.values()]
-    .sort((a, b) => a.crew.id - b.crew.id)
-    .forEach(({crew, employees}) => {
-      employees.sort((a, b) => a.fullName.localeCompare(b.fullName) || a.id - b.id);
-      byEmployeeGroupDataSet.add({
-        id: `crew-${crew.id}`, order: order++, showNested: true,
-        nestedGroups: employees.map(employee => employee.id),
-        content: $(`<div/>`).append($(`<strong/>`).text(crewName(crew))
-          .append($(`<span class="crew-color ms-2"/>`).css("background-color", pickColor("crew" + crew.id)))).html()
-      });
-      employees.forEach(employee => {
-        const roles = employee.roles.map(role => role.name).sort().join(", ");
-        byEmployeeGroupDataSet.add({
-          id: employee.id, order: order++,
-          content: $(`<div/>`)
-            .append($(`<div class="employee-link"/>`).text(employee.fullName))
-            .append(roles ? $(`<div class="small"/>`).text(roles) : null)
-            .append(employee.crewChanges.map(change =>
-              $(`<div class="small"/>`).text(`\u2192 ${crewName(change.crew)} from ${change.from}`)))
-            .append($(`<div class="text-muted small"/>`)
-              .text(`${shiftCount.get(employee.id) || 0} shifts, ${hourCount.get(employee.id) || 0} h`)).html()
-        });
-      });
-    });
-
-  $.each(schedule.crewShifts, (index, crewShift) => {
-    const crew = crewShift.crew;
-    crewShift.employeeIds.forEach(employeeId => {
-      const substitute = crewShift.extraEmployeeIds.includes(employeeId);
-      addEmployeeShiftItem(crewShift, employeeId, false, substitute
-        ? `${crewName(crew)}, substitute` : crewName(crew));
-    });
-    crewShift.absentEmployeeIds.forEach(employeeId => addEmployeeShiftItem(crewShift, employeeId, true, "absent"));
-    crewShift.unavailableEmployeeIds.forEach(employeeId => {
-      const employee = employeesById.get(employeeId);
-      const absence = employee == null ? null : absenceOn(employee, crewShift.date);
-      addEmployeeShiftItem(crewShift, employeeId, true, absence == null ? "absent" : absenceName(absence.type), true);
-    });
-  });
-
-  // Absences as a red background in the employee's row (a dismissal up to the end of the month)
-  const monthEnd = JSJoda.YearMonth.parse(schedule.month).atEndOfMonth().toString();
-  $.each(schedule.employees, (index, employee) => {
-    employee.absences.forEach(absence => byEmployeeItemDataSet.add({
-      id: `absence-${absence.id}`, group: employee.id, type: "background", className: "absence",
-      content: $(`<div/>`).append($(`<span class="small"/>`).text(absenceName(absence.type))).html(),
-      start: absence.from,
-      end: JSJoda.LocalDate.parse(absence.to == null || absence.to > monthEnd ? monthEnd : absence.to).plusDays(1).toString()
-    }));
+  request.done(onRosterChanged).fail(xhr => {
+    showError("Не удалось изменить людей смены.", xhr);
+    renderDrawer();
   });
 }
 
-// unavailable: on an absence (vacation, sick leave, dismissal), changed in the employee dialog
-function addEmployeeShiftItem(crewShift, employeeId, absent, text, unavailable = false) {
-  const substitute = crewShift.extraEmployeeIds.includes(employeeId);
-  const element = $(`<div class="card-body p-2"/>`)
-    .append($(`<h5 class="card-title mb-1"/>`).text(crewShift.line.name))
-    .append($(`<p class="card-text ms-2 mb-0"/>`).text(text));
-  byEmployeeItemDataSet.add({
-    id: `${crewShift.id}/${employeeId}`, group: employeeId, crewId: crewShift.crew.id,
-    crewShiftId: crewShift.id, employeeId: employeeId, absent: absent, unavailable: unavailable,
-    className: absent ? "absent" : (substitute ? "substitute" : ""),
-    content: element.html(),
-    start: crewShift.start, end: crewShift.end,
-    style: absent ? "" : "background-color: " + pickColor("crew" + crewShift.crew.id)
-  });
+function changeCrew(shift, crewId) {
+  if (isNaN(crewId) || crewId === shift.crew.id) {
+    return;
+  }
+  send("PUT", crewShiftUrl(shift.id), {date: shift.date, type: shift.type, lineId: shift.line.id, crewId: crewId})
+    .done(onRosterChanged)
+    .fail(xhr => showError("Не удалось сменить бригаду.", xhr));
 }
 
-// Double-click in the "By employee" tab: on a bar, change this employee on this shift; on an empty place in
-// an employee row, add the employee to a crew shift at that time
-function onEmployeeDoubleClick(props) {
+function setPinned(shift, pinned) {
+  send("PUT", crewShiftUrl(shift.id) + "/pinned", {pinned: pinned})
+    .done(onRosterChanged)
+    .fail(xhr => showError("Не удалось закрепить смену.", xhr));
+}
+
+function removeCrewShift(shift) {
+  if (!confirm(`Удалить смену бригады ${crewName(shift.crew)} (${shift.line.name}, ${formatDate(shift.date)}, ${shiftLabel(shift.type)})?`)) {
+    return;
+  }
+  send("DELETE", crewShiftUrl(shift.id))
+    .done(roster => {
+      closeDrawer();
+      onRosterChanged(roster);
+    })
+    .fail(xhr => showError("Не удалось удалить смену.", xhr));
+}
+
+// ----- One employee: shifts and hours, crew and crew changes, absences, rest warnings -----
+
+function renderEmployeeDrawer(employee) {
+  if (employee == null) {
+    return false;
+  }
+  const monthEnd = JSJoda.YearMonth.parse(shownMonth).atEndOfMonth().toString();
+  $("#drawerHeader").empty().append($(`<div class="d-flex gap-2 align-items-center"/>`)
+    .append($(`<span class="avatar"/>`).text(initials(employee.fullName)))
+    .append($(`<div/>`)
+      .append($(`<h2 class="drawer-title"/>`).text(employee.fullName))
+      .append($(`<div class="drawer-subtitle"/>`)
+        .text(`Таб. № ${employee.id} · бригада ${crewName(crewOn(employee, monthEnd))}`))));
+
+  const body = $("#drawerBody").empty();
+  const totals = monthTotals(employee);
+  const warnings = index.employeeWarnings.get(employee.id) || [];
+  body.append($(`<div class="drawer-section"/>`).append($(`<h6/>`).text(`Время за ${monthTitle(shownMonth).toLowerCase()}`))
+    .append($(`<div class="stat-boxes"/>`)
+      .append(statBox("Смены", totals.shifts, `${totals.day} Д / ${totals.night} Н`))
+      .append(statBox("Часы", formatHours(totals.hours), "по времени смен"))
+      .append(statBox("Нарушения отдыха", warnings.length, "", warnings.length > 0))));
+
+  const warningSection = $(`<div class="drawer-section"/>`).append($(`<h6/>`).text("Отдых между сменами"));
+  if (warnings.length === 0) {
+    warningSection.append($(`<span class="pill ok"/>`).append($(`<span class="fas fa-check"/>`))
+      .append(document.createTextNode("Нарушений нет")));
+  } else {
+    warningSection.append($(`<ul class="warning-list"/>`).append(warnings.map(w => $(`<li/>`).text(w.message))));
+  }
+  body.append(warningSection);
+
+  // Crew and crew changes
+  const first = JSJoda.YearMonth.parse(shownMonth).atDay(1).toString();
+  const crewList = $(`<ul class="plain-list mb-2"/>`)
+    .append($(`<li/>`).append($(`<span/>`).text(`С ${formatDate(first)}: ${crewName(employee.crew)}`)))
+    .append(employee.crewChanges.map(change => $(`<li/>`)
+      .append($(`<span/>`).text(`С ${formatDate(change.from)}: ${crewName(change.crew)}`))
+      .append($(`<button type="button" class="btn btn-sm btn-outline-danger py-0"/>`).text("Отменить")
+        .click(() => send("DELETE", `/crew-schedules/employees/${employee.id}/crew-changes/${change.from}`)
+          .done(refreshSchedule)
+          .fail(xhr => showError("Не удалось отменить перевод.", xhr))))));
+  const crewSelect = $(`<select class="form-select form-select-sm" aria-label="Перевести в бригаду"/>`)
+    .append([...lastSchedule.crews].sort((a, b) => a.id - b.id)
+      .map(crew => $(`<option/>`).val(crew.id).text(crewName(crew))))
+    .val(crewOn(employee, monthEnd).id);
+  const crewFrom = $(`<input type="date" class="form-control form-control-sm" aria-label="С даты"/>`)
+    .attr({min: first, max: monthEnd});
+  body.append($(`<div class="drawer-section"/>`).append($(`<h6/>`).text("Бригада"))
+    .append(crewList)
+    .append($(`<div class="row g-2 align-items-end"/>`)
+      .append($(`<div class="col"/>`).append($(`<label class="form-label small mb-0"/>`).text("Перевести в бригаду"))
+        .append(crewSelect))
+      .append($(`<div class="col"/>`).append($(`<label class="form-label small mb-0"/>`).text("с даты (пусто — весь месяц)"))
+        .append(crewFrom))
+      .append($(`<div class="col-auto"/>`).append($(`<button type="button" class="btn btn-sm btn-dark"/>`)
+        .text("Перевести")
+        .click(() => send("PUT", `/crew-schedules/employees/${employee.id}/crew`,
+          {crewId: parseInt(crewSelect.val()), from: crewFrom.val() || null})
+          .done(refreshSchedule)
+          .fail(xhr => showError("Не удалось перевести сотрудника.", xhr)))))));
+
+  // Absences
+  const absenceList = $(`<ul class="plain-list mb-2"/>`).append(employee.absences.length === 0
+    ? $(`<li class="text-muted"/>`).text("Отсутствий нет.")
+    : employee.absences.map(absence => $(`<li/>`)
+      .append($(`<span/>`).text(describeAbsence(absence)))
+      .append($(`<button type="button" class="btn btn-sm btn-outline-danger py-0"/>`).text("Удалить")
+        .click(() => send("DELETE", `/crew-schedules/employees/${employee.id}/absences/${encodeURIComponent(absence.id)}`)
+          .done(onRosterChanged)
+          .fail(xhr => showError("Не удалось удалить отсутствие.", xhr))))));
+  const typeSelect = $(`<select class="form-select form-select-sm" aria-label="Тип отсутствия"/>`)
+    .append(Object.entries(ABSENCES).map(([type, absence]) => $(`<option/>`).val(type).text(absence.name)));
+  const from = $(`<input type="date" class="form-control form-control-sm" aria-label="С"/>`).attr("max", monthEnd);
+  const to = $(`<input type="date" class="form-control form-control-sm" aria-label="По"/>`).attr("min", first);
+  typeSelect.on("change", () => to.prop("disabled", typeSelect.val() === "DISMISSAL"));
+  body.append($(`<div class="drawer-section"/>`).append($(`<h6/>`).text("Отсутствия"))
+    .append(absenceList)
+    .append($(`<div class="row g-2 align-items-end"/>`)
+      .append($(`<div class="col-12"/>`).append(typeSelect))
+      .append($(`<div class="col"/>`).append($(`<label class="form-label small mb-0"/>`).text("с")).append(from))
+      .append($(`<div class="col"/>`).append($(`<label class="form-label small mb-0"/>`).text("по (включительно)")).append(to))
+      .append($(`<div class="col-auto"/>`).append($(`<button type="button" class="btn btn-sm btn-dark"/>`)
+        .text("Добавить")
+        .click(() => addAbsence(employee, typeSelect.val(), from.val(), to.val()))))));
+  return true;
+}
+
+function addAbsence(employee, type, from, to) {
+  const dismissal = type === "DISMISSAL";
+  if (!from || (!dismissal && !to)) {
+    showSimpleError(dismissal ? "Укажите первый день без работы." : "Укажите первый и последний день.");
+    return;
+  }
+  send("POST", `/crew-schedules/employees/${employee.id}/absences`, {type: type, from: from, to: dismissal ? null : to})
+    .done(onRosterChanged)
+    .fail(xhr => showError("Не удалось добавить отсутствие.", xhr));
+}
+
+function statBox(label, value, hint, alert = false) {
+  return $(`<div class="stat-box"/>`)
+    .append($(`<div class="label"/>`).text(label))
+    .append($(`<div class="value num"/>`).text(value).css("color", alert ? "var(--deficit-text)" : ""))
+    .append($(`<div class="hint"/>`).text(hint));
+}
+
+// ---------- Dialogs ----------
+
+// New month (also previous / next month): replaces the version; "Сгенерировать график" -> generate=true
+function openNewMonthDialog(month) {
+  $("#newMonthInput").val(month);
+  $("#newMonthGenerate").prop("checked", false);
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("newMonthModal")).show();
+}
+
+function startNewMonth() {
+  const month = $("#newMonthInput").val();
+  if (!month) {
+    showSimpleError("Выберите месяц.");
+    return;
+  }
+  const generate = $("#newMonthGenerate").is(":checked");
+  send("POST", `/crew-schedules/init?month=${encodeURIComponent(month)}&generate=${generate}`).done(roster => {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("newMonthModal")).hide();
+    closeDrawer();
+    onRosterChanged(roster);
+  }).fail(xhr => showError("Не удалось создать график месяца.", xhr));
+}
+
+// Generator: line (all or one), from date, start crew, pin, the sample of each line, pin / unpin of a period
+function openGenerateDialog() {
   if (lastSchedule == null) {
+    showSimpleError("Графика ещё нет. Сначала создайте месяц.");
     return;
   }
-  if (props.item != null) {
-    const item = byEmployeeItemDataSet.get(props.item);
-    if (item != null && item.unavailable) {
-      openEmployeeDialog(item.employeeId);
-    } else if (item != null && item.crewShiftId != null) {
-      openShiftEmployeeDialog(item.absent ? "absent" : "works", item.employeeId, item.crewShiftId);
-    }
-    return;
-  }
-  if (props.what !== "background" || typeof props.group !== "number" || props.time == null) {
-    return; // Not an employee row (e.g. a crew row)
-  }
-  const slot = slotOf(props.time);
-  const employee = lastSchedule.employees.find(e => e.id === props.group);
-  const absence = employee == null ? null : absenceOn(employee, slot.date);
-  if (absence != null) {
-    showSimpleError(`${employee.fullName} is absent (${absenceName(absence.type)}) on ${slot.date}.`);
-    return;
-  }
-  const crewShifts = lastSchedule.crewShifts.filter(crewShift => crewShift.date === slot.date && crewShift.type === slot.type);
-  if (crewShifts.length === 0) {
-    showSimpleError(`No crew works on ${slot.date}, ${shiftName(slot.type)}. Add a crew shift in "By line" first.`);
-    return;
-  }
-  openShiftEmployeeDialog("add", props.group, null, crewShifts);
+  const lineSelect = $("#generateLine").empty().append($(`<option value=""/>`).text("Все линии"));
+  index.lines.forEach(line => lineSelect.append($(`<option/>`).val(line.id).text(line.name)));
+  const month = JSJoda.YearMonth.parse(shownMonth);
+  const range = {min: month.atDay(1).toString(), max: month.atEndOfMonth().toString()};
+  $("#generateFrom").val(range.min).attr(range);
+  // "По дату": the last day of the shown month (also after the month changed)
+  $("#generateTo").val(range.max).attr(range);
+  $("#bulkPinFrom").val(range.min).attr(range);
+  $("#bulkPinTo").val(range.max).attr(range);
+  $("#generatePin").prop("checked", true);
+  renderGenerateStartCrews();
+  renderGenerateLines();
+  modal("generateModal").show();
 }
 
-// mode: "works" (take off or replace), "absent" (works again) or "add" (choose one of crewShifts)
+function modal(id) {
+  return bootstrap.Modal.getOrCreateInstance(document.getElementById(id));
+}
+
+// Every line with the source of its order: pinned shifts ("своя очередь") or the default
+function renderGenerateLines() {
+  const pinnedLines = new Set(lastSchedule.crewShifts.filter(shift => shift.pinned).map(shift => shift.line.id));
+  $("#generateLineList").empty().append(index.lines.map(line => $(`<li/>`)
+    .append($(`<span/>`).text(line.name + " "))
+    .append($(`<span class="queue-badge"/>`).toggleClass("own", pinnedLines.has(line.id))
+      .text(pinnedLines.has(line.id) ? "своя очередь" : "по умолчанию"))
+    .append($(`<button type="button" class="btn btn-link btn-sm p-0 sample-link"/>`).attr("data-line", line.id)
+      .text("Задать очередь бригад"))));
+}
+
+// "По дату" cannot be before "С даты"
+function onGenerateFromChange() {
+  const from = $("#generateFrom").val();
+  const month = JSJoda.YearMonth.parse(shownMonth);
+  $("#generateTo").attr("min", from || month.atDay(1).toString());
+  if (from && $("#generateTo").val() && $("#generateTo").val() < from) {
+    $("#generateTo").val(from);
+  }
+}
+
+// A start crew can only be chosen for one line, from the crews of that line (Crew.lineId)
+function renderGenerateStartCrews() {
+  const lineId = $("#generateLine").val();
+  const select = $("#generateStartCrew").empty()
+    .append($(`<option value=""/>`).text("Авто (по очереди линии)"));
+  if (lineId) {
+    lastSchedule.crews.filter(crew => crew.lineId === lineId).sort((a, b) => a.id - b.id)
+      .forEach(crew => select.append($(`<option/>`).val(crew.id).text(crewName(crew))));
+  }
+  select.prop("disabled", !lineId);
+}
+
+function startGeneration() {
+  const startCrewId = $("#generateStartCrew").val();
+  const from = $("#generateFrom").val() || null;
+  const to = $("#generateTo").val() || null; // empty: up to the end of the month
+  if (from && to && to < from) {
+    showSimpleError("Дата «по» раньше даты «с».");
+    return;
+  }
+  runGeneration({
+    lineId: $("#generateLine").val() || null,
+    from: from,
+    to: to,
+    startCrewId: startCrewId ? parseInt(startCrewId) : null,
+    pin: $("#generatePin").is(":checked")
+  });
+}
+
+// Preview first: nothing to do / generate without asking / ask what to do with the unpinned crew shifts
+function runGeneration(request) {
+  const params = new URLSearchParams();
+  if (request.lineId) {
+    params.set("lineId", request.lineId);
+  }
+  if (request.from) {
+    params.set("from", request.from);
+  }
+  if (request.to) {
+    params.set("to", request.to);
+  }
+  $.getJSON(`/crew-schedules/generate/preview?${params}`, preview => {
+    const total = preview.total;
+    const period = periodText(preview.from, preview.to);
+    if (total.empty === 0 && total.unpinned === 0) {
+      modal("generateModal").hide();
+      showInfo("Месяц уже заполнен", `В период ${period} нет пустых и незакреплённых смен.`);
+    } else if (total.unpinned === 0) {
+      sendGeneration(request, false, preview);
+    } else {
+      pendingGeneration = {request: request, preview: preview};
+      $("#overwriteModalText").text(`В период ${period}: ${total.unpinned} ${plural(total.unpinned, "незакреплённая смена",
+        "незакреплённые смены", "незакреплённых смен")}. Что сделать?`);
+      $("#overwriteModalPinned").text(`Закреплённые ${total.pinned} ${plural(total.pinned, "смена", "смены", "смен")} `
+        + `${total.pinned === 1 ? "останется" : "останутся"}. Пустых мест: ${total.empty}.`);
+      $("#overwriteModalFill").prop("disabled", total.empty === 0);
+      modal("generateModal").hide();
+      modal("overwriteModal").show();
+    }
+  }).fail(xhr => showError("Не удалось проверить период.", xhr));
+}
+
+function answerOverwrite(overwrite) {
+  const pending = pendingGeneration;
+  pendingGeneration = null;
+  modal("overwriteModal").hide();
+  if (pending != null) {
+    sendGeneration(pending.request, overwrite, pending.preview);
+  }
+}
+
+// preview: the answer of the preview, for the period in the result toast
+function sendGeneration(request, overwrite, preview) {
+  generationPeriod = {from: preview.from, to: preview.to};
+  send("POST", "/crew-schedules/generate", {...request, overwrite: overwrite}).done(roster => {
+    modal("generateModal").hide();
+    onRosterChanged(roster);
+  }).fail(xhr => {
+    generationPeriod = null;
+    showError("Не удалось заполнить график.", xhr);
+  });
+}
+
+// "с 05.11 по 15.11"
+function periodText(from, to) {
+  return `с ${shortDate(from)} по ${shortDate(to)}`;
+}
+
+// ----- Clear the crew shifts of a line / all lines in a period -----
+
+// The line menu (⋯) of a row in "По линиям": a fixed box under the button, so the scrolling grid does not cut it
+function toggleLineMenu(button) {
+  const menu = $("#lineMenu");
+  const lineId = String(button.data("line"));
+  if (!menu.prop("hidden") && menu.data("line") === lineId) {
+    closeLineMenu();
+    return;
+  }
+  const rect = button[0].getBoundingClientRect();
+  menu.data("line", lineId).prop("hidden", false).css({top: rect.bottom + 4, left: rect.left});
+  button.attr("aria-expanded", "true");
+  menu.find("button").first().trigger("focus");
+}
+
+function closeLineMenu() {
+  $("#lineMenu").prop("hidden", true);
+  $(".line-menu-button[aria-expanded]").removeAttr("aria-expanded");
+}
+
+// "Очистить" of the generator dialog: its line and the dates next to the button
+function clearFromGenerateDialog() {
+  const from = $("#bulkPinFrom").val();
+  const to = $("#bulkPinTo").val();
+  if (!from || !to || to < from) {
+    showSimpleError("Укажите период: первый и последний день.");
+    return;
+  }
+  openClearDialog($("#generateLine").val() || null, from, to);
+}
+
+// The counts come from the generator preview (pinned / unpinned in the period)
+function openClearDialog(lineId, from, to) {
+  const params = new URLSearchParams();
+  if (lineId) {
+    params.set("lineId", lineId);
+  }
+  if (from) {
+    params.set("from", from);
+  }
+  if (to) {
+    params.set("to", to);
+  }
+  $.getJSON(`/crew-schedules/generate/preview?${params}`, preview => {
+    pendingClear = {lineId: lineId, preview: preview};
+    $("#clearIncludePinned").prop("checked", false);
+    renderClearDialog();
+    modal("generateModal").hide();
+    modal("clearModal").show();
+  }).fail(xhr => showError("Не удалось посчитать смены периода.", xhr));
+}
+
+function renderClearDialog() {
+  if (pendingClear == null) {
+    return;
+  }
+  const preview = pendingClear.preview;
+  const pinned = preview.total.pinned;
+  const unpinned = preview.total.unpinned;
+  const includePinned = $("#clearIncludePinned").is(":checked");
+  const count = unpinned + (includePinned ? pinned : 0);
+  const line = pendingClear.lineId == null ? null : index.linesById.get(pendingClear.lineId);
+  const where = pendingClear.lineId == null ? "всех линий" : `линии ${line == null ? pendingClear.lineId : line.name}`;
+  const period = periodText(preview.from, preview.to);
+  $("#clearIncludePinnedLabel").text(`Включая закреплённые (${pinned})`);
+  $("#clearIncludePinned").prop("disabled", pinned === 0);
+  let note = null;
+  if (pinned + unpinned === 0) {
+    $("#clearModalText").text(`У ${where} нет смен в период ${period}.`);
+  } else if (count === 0) {
+    $("#clearModalText").text(`У ${where} в период ${period} только закреплённые смены (${pinned}).`);
+    note = "Все смены периода закреплены — отметьте «Включая закреплённые» или открепите их.";
+  } else {
+    $("#clearModalText").text(`Удалить ${count} ${plural(count, "смену", "смены", "смен")} ${where} ${period}? `
+      + "Замены и снятия в этих сменах тоже удалятся.");
+  }
+  $("#clearModalNote").text(note || "").prop("hidden", note == null);
+  $("#clearModalSave").prop("disabled", count === 0);
+}
+
+function saveClear() {
+  const pending = pendingClear;
+  if (pending == null) {
+    return;
+  }
+  const body = {
+    lineId: pending.lineId,
+    from: pending.preview.from,
+    to: pending.preview.to,
+    includePinned: $("#clearIncludePinned").is(":checked")
+  };
+  send("POST", "/crew-schedules/crew-shifts/clear", body).done(roster => {
+    pendingClear = null;
+    modal("clearModal").hide();
+    onRosterChanged(roster);
+    const cleared = roster.cleared;
+    const removed = `${plural(cleared.removed, "Удалена", "Удалено", "Удалено")} ${cleared.removed} `
+      + plural(cleared.removed, "смена", "смены", "смен");
+    const kept = cleared.keptPinned === 0 ? "" : `, закреплённых оставлено: ${cleared.keptPinned}`;
+    showInfo("Очистка", `${removed}${kept}.`);
+  }).fail(xhr => showError("Не удалось очистить смены.", xhr));
+}
+
+// "Закрепить всё" / "Открепить всё" for the line chosen in the dialog (or all lines) and a date range
+function bulkPin(pinned) {
+  const lineId = $("#generateLine").val() || null;
+  const from = $("#bulkPinFrom").val();
+  const to = $("#bulkPinTo").val();
+  if (!from || !to || to < from) {
+    showSimpleError("Укажите период: первый и последний день.");
+    return;
+  }
+  const inRange = lastSchedule.crewShifts.filter(shift => (lineId == null || shift.line.id === lineId)
+    && shift.date >= from && shift.date <= to).length;
+  const where = lineId == null ? "всех линий" : `линии ${index.linesById.get(lineId).name}`;
+  if (!confirm(`${pinned ? "Закрепить" : "Открепить"} ${inRange} ${plural(inRange, "смену", "смены", "смен")} ${where} `
+    + `с ${formatDate(from)} по ${formatDate(to)}?`)) {
+    return;
+  }
+  send("POST", "/crew-schedules/crew-shifts/pinned", {lineId: lineId, from: from, to: to, pinned: pinned})
+    .done(roster => onRosterChanged(roster).done(() => renderGenerateLines()))
+    .fail(xhr => showError("Не удалось изменить закрепление.", xhr));
+}
+
+// ----- Sample ("Очередь бригад"): DAY crews of 4 days in a row, any crews, the line's own crews first -----
+
+function openSampleDialog(lineId) {
+  sampleLineId = lineId;
+  const line = index.linesById.get(lineId);
+  const month = JSJoda.YearMonth.parse(shownMonth);
+  $("#sampleModalTitle").text(`Очередь бригад: ${line == null ? lineId : line.name}`);
+  $("#sampleFrom").val(month.atDay(1).toString())
+    .attr({min: month.atDay(1).toString(), max: month.atEndOfMonth().minusDays(3).toString()});
+  renderSampleDays();
+  modal("generateModal").hide();
+  modal("sampleModal").show();
+}
+
+function renderSampleDays() {
+  const from = $("#sampleFrom").val();
+  const box = $("#sampleDays").empty();
+  if (!from) {
+    return;
+  }
+  const crews = [...lastSchedule.crews].sort((a, b) => a.id - b.id);
+  const options = list => list.map(crew => $(`<option/>`).val(crew.id).text(crewName(crew)));
+  const own = crews.filter(crew => crew.lineId === sampleLineId);
+  const others = crews.filter(crew => crew.lineId !== sampleLineId);
+  for (let day = 0; day < 4; day++) {
+    const date = JSJoda.LocalDate.parse(from).plusDays(day).toString();
+    const current = index.shiftsBySlot.get(slotKey(sampleLineId, date, "DAY"));
+    const select = $(`<select class="form-select form-select-sm sample-crew"/>`)
+      .attr("aria-label", `Дневная бригада ${formatDate(date)}`)
+      .append($(`<option value=""/>`).text("— не задана —"))
+      .append($(`<optgroup label="Бригады линии"/>`).append(options(own)))
+      .append($(`<optgroup label="Другие линии"/>`).append(options(others)))
+      .val(current != null ? current.crew.id : (own[[0, 2, 3, 1][day]]?.id ?? ""));
+    box.append($(`<div class="sample-day"/>`)
+      .append($(`<span/>`).text(`${formatDate(date)}, ${weekday(date)}`)).append(select));
+  }
+}
+
+function saveSample(fill) {
+  const from = $("#sampleFrom").val();
+  const lineId = sampleLineId;
+  const dayCrewIds = $("#sampleDays .sample-crew").toArray().map(el => el.value ? parseInt(el.value) : null);
+  const chosen = dayCrewIds.filter(id => id != null);
+  if (!from || chosen.length < 3 || new Set(chosen).size !== chosen.length) {
+    showSimpleError("Выберите минимум 3 разные бригады.");
+    return;
+  }
+  send("PUT", `/crew-schedules/lines/${encodeURIComponent(lineId)}/sample`, {from: from, dayCrewIds: dayCrewIds})
+    .done(roster => {
+      modal("sampleModal").hide();
+      onRosterChanged(roster).done(() => {
+        if (fill) {
+          runGeneration({lineId: lineId, from: from, startCrewId: null, pin: true});
+        } else {
+          modal("generateModal").show();
+          renderGenerateLines();
+        }
+      });
+    })
+    .fail(xhr => showError("Не удалось поставить очередь.", xhr));
+}
+
+// What the generator did: created and kept shifts, messages (skipped lines, shifts left empty)
+function showGeneration(generation) {
+  const period = generationPeriod;
+  generationPeriod = null;
+  if (generation == null) {
+    return;
+  }
+  const delay = generation.messages.length === 0 ? 8000 : 30000;
+  const toast = $(`<div class="toast" role="status" aria-live="polite" aria-atomic="true"/>`).attr("data-bs-delay", delay)
+    .append($(`<div class="toast-header"/>`)
+      .append($(`<span class="fas fa-magic me-2"/>`))
+      .append($(`<strong class="me-auto"/>`).text("Авто-заполнение"))
+      .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Закрыть"/>`)))
+    .append($(`<div class="toast-body"/>`)
+      .append(period == null ? null : $(`<p class="mb-1 fw-semibold"/>`).text(`Период: ${periodText(period.from, period.to)}`))
+      .append($(`<p class="mb-1"/>`).text(`Создано смен: ${generation.created}, оставлено как было: ${generation.kept}.`))
+      .append(generation.messages.length === 0 ? null : $(`<ul class="generation-messages small mb-0 ps-3"/>`)
+        .append(generation.messages.map(message => $(`<li/>`).text(message)))));
+  showToast(toast);
+}
+
+// Crew picker for an empty line shift
+function openCrewPicker(slot) {
+  if (lastSchedule == null || lastSchedule.crews.length === 0) {
+    showSimpleError("Нет бригад.");
+    return;
+  }
+  pickerSlot = slot;
+  const line = index.linesById.get(slot.lineId);
+  $("#crewShiftModalSlot").text(`${line == null ? slot.lineId : line.name}, ${formatDate(slot.date)}, ${shiftLabel(slot.type)}`);
+  const select = $("#crewShiftModalCrew");
+  fillCrewSelect(select, {...slot, crewShiftId: null}, null);
+  const selectable = select.find("option:not(:disabled)");
+  if (selectable.length > 0) {
+    select.val(selectable.first().val());
+  }
+  bootstrap.Modal.getOrCreateInstance(document.getElementById("crewShiftModal")).show();
+}
+
+function saveCrewPicker() {
+  const slot = pickerSlot;
+  const crewId = parseInt($("#crewShiftModalCrew").val());
+  if (slot == null || isNaN(crewId)) {
+    showSimpleError("Выберите бригаду.");
+    return;
+  }
+  send("POST", "/crew-schedules/crew-shifts", {date: slot.date, type: slot.type, lineId: slot.lineId, crewId: crewId})
+    .done(roster => {
+      bootstrap.Modal.getOrCreateInstance(document.getElementById("crewShiftModal")).hide();
+      onRosterChanged(roster);
+    })
+    .fail(xhr => showError("Не удалось поставить бригаду.", xhr));
+}
+
+// The crews of the line first, then the crews of other lines. A crew that already works at the same time on
+// another line cannot be chosen.
+function fillCrewSelect(select, slot, selectedCrewId) {
+  const busy = new Map();
+  (index.shiftsByDate.get(slot.date) || [])
+    .filter(shift => shift.type === slot.type && shift.id !== slot.crewShiftId)
+    .forEach(shift => busy.set(shift.crew.id, shift.line.name));
+  const option = crew => $(`<option/>`).val(crew.id)
+    .text(crewName(crew) + (busy.has(crew.id) ? ` (работает: ${busy.get(crew.id)})` : ""))
+    .prop("disabled", busy.has(crew.id) && crew.id !== selectedCrewId);
+  const crews = [...lastSchedule.crews].sort((a, b) => a.id - b.id);
+  const own = crews.filter(crew => crew.lineId === slot.lineId);
+  const others = crews.filter(crew => crew.lineId !== slot.lineId);
+  select.empty();
+  if (own.length > 0) {
+    select.append($(`<optgroup label="Бригады линии"/>`).append(own.map(option)));
+  }
+  if (others.length > 0) {
+    select.append($(`<optgroup label="Другие линии"/>`).append(others.map(option)));
+  }
+  if (selectedCrewId != null) {
+    select.val(selectedCrewId);
+  }
+}
+
+// One employee on one crew shift ("По сотрудникам" cell). mode: "works" (take off or replace), "absent" (works
+// again) or "add" (choose one of crewShifts)
 function openShiftEmployeeDialog(mode, employeeId, crewShiftId, crewShifts) {
-  const employee = lastSchedule.employees.find(e => e.id === employeeId);
-  const crewShift = lastSchedule.crewShifts.find(s => s.id === crewShiftId);
-  if (employee == null || (mode !== "add" && crewShift == null)) {
+  const employee = index.employeesById.get(employeeId);
+  const shift = index.shiftsById.get(crewShiftId);
+  if (employee == null || (mode !== "add" && shift == null)) {
     return;
   }
   employeeDialog = {mode: mode, employeeId: employeeId, crewShiftId: crewShiftId};
   const select = $("#shiftEmployeeModalSelect").empty();
   $("#shiftEmployeeModalTitle").text(employee.fullName);
   $("#shiftEmployeeModalSelectGroup").toggle(mode !== "absent");
-
   if (mode === "works") {
-    $("#shiftEmployeeModalText").text(`Works on ${describeShift(crewShift)}. Only this shift changes.`);
-    $("#shiftEmployeeModalSelectLabel").text("Replaced by");
-    select.append($(`<option value=""/>`).text("Nobody (one person less)"));
-    freeEmployees(crewShift.date, crewShift.type)
-      .forEach(other => select.append(employeeOption(other, crewShift.date)));
+    $("#shiftEmployeeModalText").text(`Работает: ${describeShift(shift)}. Изменится только эта смена.`);
+    $("#shiftEmployeeModalSelectLabel").text("Кто выйдет вместо него");
+    select.append($(`<option value=""/>`).text("Никто (на одного меньше)"));
+    freeEmployees(shift.date, shift.type).forEach(other => select.append(employeeOption(other, shift.date)));
   } else if (mode === "absent") {
-    $("#shiftEmployeeModalText").text(`Does not work on ${describeShift(crewShift)} (absent).`);
+    $("#shiftEmployeeModalText").text(`Снят со смены: ${describeShift(shift)}.`);
   } else {
-    const first = crewShifts[0];
-    $("#shiftEmployeeModalText").text(`Add to a crew shift on ${first.date}, ${shiftName(first.type)}. Only this shift changes.`);
-    $("#shiftEmployeeModalSelectLabel").text("Crew shift");
-    crewShifts.forEach(other => select.append($(`<option/>`).val(other.id)
-      .text(`${other.line.name}, ${crewName(other.crew)}`)
-      .prop("disabled", other.employeeIds.includes(employeeId))));
+    $("#shiftEmployeeModalText").text(`Добавить в смену бригады ${formatDate(crewShifts[0].date)}. Изменится только эта смена.`);
+    $("#shiftEmployeeModalSelectLabel").text("Смена бригады");
+    const busyTypes = new Set(crewShifts.filter(s => s.employeeIds.includes(employeeId)).map(s => s.type));
+    [...crewShifts].sort((a, b) => a.type.localeCompare(b.type) || a.line.name.localeCompare(b.line.name))
+      .forEach(other => select.append($(`<option/>`).val(other.id)
+        .text(`${shiftLabel(other.type)}, ${other.line.name}, бригада ${crewName(other.crew)}`)
+        .prop("disabled", busyTypes.has(other.type))));
     const selectable = select.find("option:not(:disabled)");
     if (selectable.length === 0) {
-      showSimpleError(`${employee.fullName} already works at that time.`);
+      showSimpleError(`${employee.fullName} уже работает в это время.`);
       return;
     }
     select.val(selectable.first().val());
@@ -753,9 +1368,9 @@ function updateShiftEmployeeButton() {
   if (employeeDialog == null) {
     return;
   }
-  const text = employeeDialog.mode === "absent" ? "Works this shift again"
-    : employeeDialog.mode === "add" ? "Add"
-      : $("#shiftEmployeeModalSelect").val() ? "Replace" : "Take off this shift";
+  const text = employeeDialog.mode === "absent" ? "Вернуть в смену"
+    : employeeDialog.mode === "add" ? "Добавить"
+      : $("#shiftEmployeeModalSelect").val() ? "Заменить" : "Снять с этой смены";
   $("#shiftEmployeeModalSave").text(text);
 }
 
@@ -779,18 +1394,19 @@ function saveShiftEmployee() {
   request.done(roster => {
     bootstrap.Modal.getOrCreateInstance(document.getElementById("shiftEmployeeModal")).hide();
     onRosterChanged(roster);
-  }).fail(xhr => showError("Changing the people of the crew shift failed.", xhr));
+  }).fail(xhr => showError("Не удалось изменить людей смены.", xhr));
 }
+
+// ---------- Domain helpers (like the server) ----------
 
 // Employees who do not work any crew shift on this date and shift and are not absent, sorted by crew and name
 function freeEmployees(date, type) {
   const busy = new Set();
-  lastSchedule.crewShifts
-    .filter(crewShift => crewShift.date === date && crewShift.type === type)
-    .forEach(crewShift => crewShift.employeeIds.forEach(id => busy.add(id)));
+  (index.shiftsByDate.get(date) || []).filter(shift => shift.type === type)
+    .forEach(shift => shift.employeeIds.forEach(id => busy.add(id)));
   return lastSchedule.employees
     .filter(employee => !busy.has(employee.id) && absenceOn(employee, date) == null)
-    .sort((a, b) => crewOn(a, date).id - crewOn(b, date).id || a.fullName.localeCompare(b.fullName));
+    .sort((a, b) => crewOn(a, date).id - crewOn(b, date).id || byPositionAndName(a, b));
 }
 
 function employeeOption(employee, date) {
@@ -808,231 +1424,104 @@ function crewOn(employee, date) {
   return crew;
 }
 
-// The absence (vacation, sick leave, dismissal) of the employee on a date, or undefined. ISO dates compare as strings.
+// The absence of the employee on a date, or undefined. ISO dates compare as strings.
 function absenceOn(employee, date) {
   return employee.absences.find(absence => absence.from <= date && (absence.to == null || date <= absence.to));
 }
 
-const ABSENCE_NAMES = {VACATION: "vacation", SICK_LEAVE: "sick leave", DISMISSAL: "dismissed", OTHER: "absent"};
-
-function absenceName(type) {
-  return ABSENCE_NAMES[type] || type;
-}
-
 function describeAbsence(absence) {
-  return `${absenceName(absence.type)}: ` + (absence.to == null ? `from ${absence.from}` : `${absence.from} - ${absence.to}`);
+  const name = (ABSENCES[absence.type] || ABSENCES.OTHER).name;
+  return absence.to == null
+    ? `${name} с ${formatDate(absence.from)}`
+    : `${name}: ${formatDate(absence.from)} – ${formatDate(absence.to)}`;
 }
 
-// Employee dialog: the crew of the employee by date (moves from a date) and their absences
-function openEmployeeDialog(employeeId) {
-  if (lastSchedule == null || !lastSchedule.employees.some(e => e.id === employeeId)) {
-    return;
-  }
-  employeeModalId = employeeId;
-  const month = JSJoda.YearMonth.parse(lastSchedule.month);
-  const first = month.atDay(1).toString();
-  const last = month.atEndOfMonth().toString();
-  $("#employeeModalCrewFrom").attr({min: first, max: last}).val("");
-  $("#employeeModalAbsenceFrom").attr({max: last}).val("");
-  $("#employeeModalAbsenceTo").attr({min: first}).val("");
-  $("#employeeModalAbsenceType").val("VACATION");
-  $("#employeeModalAbsenceTo").prop("disabled", false);
-  renderEmployeeDialog();
-  bootstrap.Modal.getOrCreateInstance(document.getElementById("employeeModal")).show();
+// Order of the employees of a crew, like the server: by position (PLR_TB.POS; none: last), then by name
+function byPositionAndName(a, b) {
+  const positionA = a.position == null ? Number.MAX_SAFE_INTEGER : a.position;
+  const positionB = b.position == null ? Number.MAX_SAFE_INTEGER : b.position;
+  return positionA - positionB || a.fullName.localeCompare(b.fullName, "ru") || a.id - b.id;
 }
 
-// Draws the open employee dialog again (also after every change, from the new version)
-function renderEmployeeDialog() {
-  if (employeeModalId == null || lastSchedule == null) {
-    return;
-  }
-  const employee = lastSchedule.employees.find(e => e.id === employeeModalId);
-  if (employee == null) {
-    bootstrap.Modal.getOrCreateInstance(document.getElementById("employeeModal")).hide();
-    return;
-  }
-  const first = JSJoda.YearMonth.parse(lastSchedule.month).atDay(1).toString();
-  $("#employeeModalTitle").text(`${employee.fullName} (${employee.id})`);
-  $("#employeeModalRoles").text(employee.roles.length === 0 ? "No roles"
-    : "Roles: " + employee.roles.map(role => role.name).sort().join(", "));
-
-  $("#employeeModalCrews").empty()
-    .append($(`<li/>`).text(`From ${first}: ${crewName(employee.crew)}`))
-    .append(employee.crewChanges.map(change => $(`<li/>`)
-      .append($(`<span class="me-2"/>`).text(`From ${change.from}: ${crewName(change.crew)}`))
-      .append($(`<button type="button" class="btn btn-sm btn-outline-danger py-0"/>`).text("Remove")
-        .click(() => send("DELETE", `/crew-schedules/employees/${employee.id}/crew-changes/${change.from}`)
-          .done(refreshSchedule)
-          .fail(xhr => showError("Removing the crew change failed.", xhr))))));
-  const select = $("#employeeModalCrew").empty()
-    .append([...lastSchedule.crews].sort((a, b) => a.id - b.id).map(crew => $(`<option/>`).val(crew.id).text(crewName(crew))));
-  select.val(crewOn(employee, JSJoda.YearMonth.parse(lastSchedule.month).atEndOfMonth().toString()).id);
-
-  $("#employeeModalAbsences").empty().append(employee.absences.length === 0
-    ? $(`<li class="text-muted"/>`).text("No absences.")
-    : employee.absences.map(absence => $(`<li/>`)
-      .append($(`<span class="me-2"/>`).text(describeAbsence(absence)))
-      .append($(`<button type="button" class="btn btn-sm btn-outline-danger py-0"/>`).text("Remove")
-        .click(() => send("DELETE", `/crew-schedules/employees/${employee.id}/absences/${encodeURIComponent(absence.id)}`)
-          .done(onRosterChanged)
-          .fail(xhr => showError("Removing the absence failed.", xhr))))));
+function describeShift(shift) {
+  return `${formatDate(shift.date)}, ${shiftLabel(shift.type)}, ${shift.line.name}, бригада ${crewName(shift.crew)}`;
 }
 
-function saveEmployeeCrew() {
-  const crewId = parseInt($("#employeeModalCrew").val());
-  const from = $("#employeeModalCrewFrom").val();
-  if (employeeModalId == null || isNaN(crewId)) {
-    return;
-  }
-  // No date: the crew for the whole month
-  send("PUT", `/crew-schedules/employees/${employeeModalId}/crew`, {crewId: crewId, from: from || null})
-    .done(refreshSchedule)
-    .fail(xhr => showError("Moving the employee failed.", xhr));
+// Start and end ("08:00") of a shift type, from PLR_SM
+function timeOf(type) {
+  const shift = shiftTimes.find(s => s.type === type);
+  return shift == null ? {start: "", end: ""} : {start: shift.start.substring(0, 5), end: shift.end.substring(0, 5)};
 }
 
-function saveAbsence() {
-  const type = $("#employeeModalAbsenceType").val();
-  const from = $("#employeeModalAbsenceFrom").val();
-  const to = type === "DISMISSAL" ? null : $("#employeeModalAbsenceTo").val();
-  if (employeeModalId == null) {
-    return;
-  }
-  if (!from || (type !== "DISMISSAL" && !to)) {
-    showSimpleError(type === "DISMISSAL" ? "Enter the first day without work." : "Enter the first and the last day.");
-    return;
-  }
-  send("POST", `/crew-schedules/employees/${employeeModalId}/absences`, {type: type, from: from, to: to})
-    .done(roster => {
-      $("#employeeModalAbsenceFrom, #employeeModalAbsenceTo").val("");
-      onRosterChanged(roster);
-    })
-    .fail(xhr => showError("Adding the absence failed.", xhr));
-}
-
-function describeShift(crewShift) {
-  return `${crewShift.date}, ${shiftName(crewShift.type)}, ${crewShift.line.name}, crew ${crewName(crewShift.crew)}`;
-}
-
-function shiftName(type) {
-  return type === "DAY" ? "day shift (08:00-20:00)" : "night shift (20:00-08:00)";
-}
-
-// Crew list: one accordion item per crew; the body has the composition and all employees of the crew.
-// Crews that were open stay open when the list is drawn again after a change.
-function renderCrews(crews) {
-  crewDetailsList = crews;
-  const openIds = new Set($("#crewList .accordion-collapse.show").map((i, element) => element.id).get());
-  const crewList = $("#crewList").empty();
-  const employeeCount = crews.reduce((sum, details) => sum + details.employees.length, 0);
-  $("#crewCount").text(crews.length === 0 ? "" : `(${crews.length} crews, ${employeeCount} employees)`);
-  if (crews.length === 0) {
-    crewList.append($(`<p class="text-muted"/>`).text("No crews."));
-    return;
-  }
-
-  $.each(crews, (index, details) => {
-    const crew = details.crew;
-    const bodyId = `crew-${crew.id}`;
-    const open = openIds.has(bodyId);
-    const lineNames = details.lines.length === 0 ? "no line" : details.lines.map(line => line.name).join(", ");
-    const header = $(`<button class="accordion-button py-2" type="button" data-bs-toggle="collapse"/>`)
-      .toggleClass("collapsed", !open)
-      .attr("aria-expanded", String(open))
-      .attr("data-bs-target", "#" + bodyId)
-      .append($(`<span class="crew-color me-2"/>`).css("background-color", pickColor("crew" + crew.id)))
-      .append($(`<strong class="me-3"/>`).text(crewName(crew)))
-      .append($(`<span class="me-3"/>`).text(lineNames))
-      .append($(`<span class="text-muted"/>`)
-        .text(`${details.employees.length} employees, ${crew.staffCount} per shift`));
-
-    const body = $(`<div class="accordion-body py-2"/>`)
-      .append($(`<h4 class="h6"/>`).text("People per shift"))
-      .append(renderComposition(details))
-      .append($(`<h4 class="h6 mt-3"/>`).text("Employees"))
-      .append(renderCrewEmployees(details));
-
-    crewList.append($(`<div class="accordion-item"/>`)
-      .append($(`<h3 class="accordion-header"/>`).append(header))
-      .append($(`<div class="accordion-collapse collapse"/>`).toggleClass("show", open).attr("id", bodyId)
-        .append(body)));
-  });
-}
-
-// People needed per shift for each role of the crew (PLR_RLBR), read-only
-function renderComposition(details) {
-  if (details.roles.length === 0) {
-    return $(`<p class="text-muted mb-0"/>`).text("No roles.");
-  }
-  return $(`<table class="table table-sm mb-0 w-auto"/>`)
-    .append($(`<thead/>`).append($(`<tr/>`)
-      .append($(`<th/>`).text("Role"))
-      .append($(`<th/>`).text("People"))))
-    .append($(`<tbody/>`).append(details.roles.map(roleCount => $(`<tr/>`)
-      .append($(`<td/>`).text(roleCount.role.name))
-      .append($(`<td/>`).text(roleCount.count)))));
-}
-
-// Employees of the crew at the start of the month; the crew column moves an employee to another crew for the whole
-// month, the name opens the employee dialog (crew change from a date, absences)
-function renderCrewEmployees(details) {
-  if (details.employees.length === 0) {
-    return $(`<p class="text-muted mb-0"/>`).text("No employees.");
-  }
-  const rows = details.employees.map((employee, i) => {
-    const crewSelect = $(`<select class="form-select form-select-sm"/>`)
-      .append(crewDetailsList.map(other => $(`<option/>`).val(other.crew.id).text(crewName(other.crew))))
-      .val(details.crew.id)
-      .on("change", event => moveEmployee(employee.id, parseInt($(event.target).val())));
-    const changes = [
-      ...employee.crewChanges.map(change => `\u2192 ${crewName(change.crew)} from ${change.from}`),
-      ...employee.absences.map(describeAbsence)];
-    return $(`<tr/>`)
-      .append($(`<td/>`).text(i + 1))
-      .append($(`<td/>`).text(employee.id))
-      .append($(`<td/>`).append($(`<span class="employee-link"/>`).text(employee.fullName)
-        .click(() => openEmployeeDialog(employee.id))))
-      .append($(`<td/>`).text(employee.roles.map(role => role.name).sort().join(", ")))
-      .append($(`<td class="small"/>`).append(changes.map(text => $(`<div/>`).text(text))))
-      .append($(`<td/>`).append(crewSelect));
-  });
-  return $(`<table class="table table-sm table-striped mb-0"/>`)
-    .append($(`<thead/>`).append($(`<tr/>`)
-      .append($(`<th style="width: 3rem"/>`).text("#"))
-      .append($(`<th style="width: 10rem"/>`).text("Personnel number"))
-      .append($(`<th/>`).text("Full name"))
-      .append($(`<th/>`).text("Roles"))
-      .append($(`<th/>`).text("Crew changes, absences"))
-      .append($(`<th style="width: 10rem"/>`).text("Crew (whole month)"))))
-    .append($(`<tbody/>`).append(rows));
-}
-
-function moveEmployee(employeeId, crewId) {
-  send("PUT", `/crew-schedules/employees/${employeeId}/crew`, {crewId: crewId})
-    .done(refreshSchedule)
-    .fail(xhr => {
-      showError("Moving the employee failed.", xhr);
-      renderCrews(crewDetailsList);
-    });
-}
-
-function openCrewOfItem(itemDataSet, itemId) {
-  const item = itemId == null ? null : itemDataSet.get(itemId);
-  if (item != null && item.crewId != null) {
-    openCrew(item.crewId);
-  }
-}
-
-function openCrew(crewId) {
-  const element = document.getElementById(`crew-${crewId}`);
-  if (element == null) {
-    return;
-  }
-  bootstrap.Collapse.getOrCreateInstance(element, {toggle: false}).show();
-  element.closest(".accordion-item").scrollIntoView({behavior: "smooth", block: "start"});
+// "Дневная 08:00–20:00", with the times from PLR_SM
+function shiftLabel(type) {
+  const time = timeOf(type);
+  return `${type === "DAY" ? "Дневная" : "Ночная"} ${time.start}–${time.end}`;
 }
 
 function crewName(crew) {
   return crew.name == null ? String(crew.id) : crew.name.trim();
+}
+
+// ---------- Formatting ----------
+
+function monthTitle(month) {
+  const yearMonth = JSJoda.YearMonth.parse(month);
+  return `${MONTH_NAMES[yearMonth.monthValue() - 1]} ${yearMonth.year()}`;
+}
+
+function plusMonths(month, months) {
+  return JSJoda.YearMonth.parse(month).plusMonths(months).toString();
+}
+
+function dayNumber(date) {
+  return date.substring(8, 10);
+}
+
+function weekday(date) {
+  return WEEKDAYS[JSJoda.LocalDate.parse(date).dayOfWeek().value() - 1];
+}
+
+function weekendClass(date) {
+  return JSJoda.LocalDate.parse(date).dayOfWeek().value() >= 6 ? " weekend" : "";
+}
+
+// yyyy-MM-dd -> dd.MM
+function shortDate(date) {
+  return `${date.substring(8, 10)}.${date.substring(5, 7)}`;
+}
+
+// yyyy-MM-dd -> dd.MM.yyyy
+function formatDate(date) {
+  return `${date.substring(8, 10)}.${date.substring(5, 7)}.${date.substring(0, 4)}`;
+}
+
+function formatHours(hours) {
+  return Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(".", ",");
+}
+
+// 1 смена, 2 смены, 5 смен
+function plural(count, one, few, many) {
+  const n10 = count % 10;
+  const n100 = count % 100;
+  if (n10 === 1 && n100 !== 11) {
+    return one;
+  }
+  return n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14) ? few : many;
+}
+
+// "Иванов Иван Иванович" -> "ИИ"; a personnel number as the name -> "#"
+function initials(fullName) {
+  const words = fullName.split(/\s+/).filter(word => /^\p{L}/u.test(word));
+  return words.length === 0 ? "#" : words.slice(0, 2).map(word => word[0].toUpperCase()).join("");
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[ch]);
+}
+
+function cssEscape(value) {
+  return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, "\\$&");
 }
 
 function getSessionId() {
@@ -1049,7 +1538,18 @@ function getSessionId() {
   return id ?? "";
 }
 
-// Notifications (Bootstrap toasts in #notificationPanel)
+// ---------- Notifications (Bootstrap toasts) ----------
+
+function showInfo(title, text) {
+  const toast = $(`<div class="toast" role="status" aria-live="polite" aria-atomic="true" data-bs-delay="8000"/>`)
+    .append($(`<div class="toast-header"/>`)
+      .append($(`<span class="fas fa-info-circle me-2"/>`))
+      .append($(`<strong class="me-auto"/>`).text(title))
+      .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Закрыть"/>`)))
+    .append($(`<div class="toast-body"/>`).text(text));
+  showToast(toast);
+}
+
 function showSimpleError(title) {
   showNotification(title, null);
 }
@@ -1066,25 +1566,18 @@ function showError(title, xhr) {
 function showNotification(title, detail) {
   console.error(title + (detail ? "\n" + detail : ""));
   const toast = $(`<div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="30000"/>`)
-    .append($(`<div class="toast-header bg-danger"/>`)
-      .append($(`<strong class="me-auto text-dark"/>`).text("Error"))
-      .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"/>`)))
+    .append($(`<div class="toast-header text-danger"/>`)
+      .append($(`<span class="fas fa-exclamation-circle me-2"/>`))
+      .append($(`<strong class="me-auto"/>`).text("Ошибка"))
+      .append($(`<button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Закрыть"/>`)))
     .append($(`<div class="toast-body"/>`)
-      .append($(`<p/>`).text(title))
-      .append(detail ? $(`<pre class="mb-0 small"/>`).text(detail) : null));
+      .append($(`<p class="mb-1"/>`).text(title))
+      .append(detail ? $(`<pre class="mb-0 small text-wrap"/>`).text(detail) : null));
+  showToast(toast);
+}
+
+function showToast(toast) {
   $("#notificationPanel").append(toast);
   toast.on("hidden.bs.toast", () => toast.remove());
   new bootstrap.Toast(toast[0]).show();
-}
-
-// The same key always gets the same color (e.g. one color per crew)
-const COLORS = ["#8AE234", "#FCAF3E", "#729FCF", "#E9B96E", "#AD7FA8", "#FCE94F", "#EF2929", "#73D216",
-  "#F57900", "#3465A4", "#C17D11", "#75507B", "#EDD400", "#CC0000", "#4E9A06"];
-const colorByKey = new Map();
-
-function pickColor(key) {
-  if (!colorByKey.has(key)) {
-    colorByKey.set(key, COLORS[colorByKey.size % COLORS.length]);
-  }
-  return colorByKey.get(key);
 }

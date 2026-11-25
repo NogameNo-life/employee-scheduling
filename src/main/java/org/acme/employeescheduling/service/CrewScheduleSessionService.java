@@ -50,6 +50,7 @@ public class CrewScheduleSessionService {
         } catch (RuntimeException e) {
             LOGGER.error("Could not load the lines at startup.", e);
         }
+        crewDataCache.refreshShifts(); // never fails: default times if PLR_SM cannot be read
         try {
             init(SessionHeader.DEFAULT_SESSION_ID, YearMonth.now(clock));
         } catch (RuntimeException e) {

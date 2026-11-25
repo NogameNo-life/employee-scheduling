@@ -13,6 +13,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.CrewShift;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.domain.ShiftType;
 import org.acme.employeescheduling.service.LineSchedule.LineDay;
 import org.apache.commons.lang3.tuple.Pair;
@@ -26,29 +27,32 @@ class LineScheduleJsonTest {
 
     @Test
     void pairIsWrittenAsDayShiftAndNightShift() throws Exception {
-        Line line = new Line("L1", "Line 1");
+        Line line = new Line("БерЦГС1", "170610060000", "Line 1");
         LocalDate date = LocalDate.of(2026, 11, 1);
-        CrewShift dayShift = new CrewShift("d", date, ShiftType.DAY, line, new Crew(1, "Cr1"));
+        Crew crew = new Crew(1, "Cr1");
+        crew.setLineId("БерЦГС1");
+        CrewShift dayShift = new CrewShift("d", date, ShiftTime.defaultFor(ShiftType.DAY), line, crew);
         dayShift.setPinned(true);
         LineSchedule schedule = new LineSchedule(line, List.of(new LineDay(date, Pair.of(dayShift, null))));
 
         // Trees, not strings: the order of the fields (e.g. the getters start and end) is not fixed
         assertThat((JsonNode) mapper.valueToTree(schedule)).isEqualTo(mapper.readTree("""
-                {"line":{"id":"L1","name":"Line 1"},"days":[{"date":"2026-11-01",\
-                "dayShift":{"id":"d","date":"2026-11-01","type":"DAY","line":{"id":"L1","name":"Line 1"},\
-                "crew":{"id":1,"name":"Cr1","staffCount":0},"pinned":true,\
+                {"line":{"id":"БерЦГС1","krc":"170610060000","name":"Line 1"},"days":[{"date":"2026-11-01",\
+                "dayShift":{"id":"d","date":"2026-11-01","type":"DAY",\
+                "line":{"id":"БерЦГС1","krc":"170610060000","name":"Line 1"},\
+                "crew":{"id":1,"name":"Cr1","staffCount":0,"lineId":"БерЦГС1"},"pinned":true,\
                 "employeeIds":[],"absentEmployeeIds":[],"extraEmployeeIds":[],"unavailableEmployeeIds":[],\
-                "roleCounts":null,"staffCount":0,\
+                "staffCount":0,"hours":12.0,\
                 "start":"2026-11-01T08:00:00","end":"2026-11-01T20:00:00"},"nightShift":null}]}"""));
     }
 
     @Test
     void groupsDayAndNightShiftIntoOnePairPerDay() {
-        Line line = new Line("L1", "Line 1");
+        Line line = new Line("L1", null, "Line 1");
         LocalDate day1 = LocalDate.of(2026, 11, 1);
-        CrewShift night2 = new CrewShift("n2", day1.plusDays(1), ShiftType.NIGHT, line, new Crew(1, "Cr1"));
-        CrewShift day1Shift = new CrewShift("d1", day1, ShiftType.DAY, line, new Crew(1, "Cr1"));
-        CrewShift night1 = new CrewShift("n1", day1, ShiftType.NIGHT, line, new Crew(2, "Cr2"));
+        CrewShift night2 = new CrewShift("n2", day1.plusDays(1), ShiftTime.defaultFor(ShiftType.NIGHT), line, new Crew(1, "Cr1"));
+        CrewShift day1Shift = new CrewShift("d1", day1, ShiftTime.defaultFor(ShiftType.DAY), line, new Crew(1, "Cr1"));
+        CrewShift night1 = new CrewShift("n1", day1, ShiftTime.defaultFor(ShiftType.NIGHT), line, new Crew(2, "Cr2"));
 
         List<LineSchedule> schedules = LineSchedule.of(List.of(night2, day1Shift, night1));
 

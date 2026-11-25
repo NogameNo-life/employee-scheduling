@@ -4,24 +4,33 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.acme.employeescheduling.config.SessionHeader;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.Line;
+import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.exception.ScheduleException;
 import org.acme.employeescheduling.repository.CrewScheduleRepository.ScheduleVersion;
 import org.acme.employeescheduling.service.CrewDataCache;
 import org.acme.employeescheduling.service.CrewRosterService;
 import org.acme.employeescheduling.service.CrewRosterService.CrewDetails;
 import org.acme.employeescheduling.service.CrewRosterService.Rotation;
+import org.acme.employeescheduling.service.CrewRotationGenerator;
+import org.acme.employeescheduling.service.CrewRotationGenerator.GeneratePreview;
+import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateRequest;
+import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateResult;
 import org.acme.employeescheduling.service.CrewScheduleEditor;
 import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
+import org.acme.employeescheduling.service.CrewScheduleEditor.ClearResult;
 import org.acme.employeescheduling.service.CrewScheduleEditor.CrewShiftRequest;
+import org.acme.employeescheduling.service.CrewScheduleEditor.SampleRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
+import org.acme.employeescheduling.service.ScheduleValidator;
+import org.acme.employeescheduling.service.ScheduleValidator.ScheduleWarning;
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -49,19 +58,24 @@ public class CrewScheduleController {
     private final CrewScheduleSessionService sessionService;
     private final CrewRosterService rosterService;
     private final CrewScheduleEditor editor;
+    private final CrewRotationGenerator generator;
+    private final ScheduleValidator validator;
     private final CrewDataCache crewDataCache;
     private final Clock clock;
 
     public CrewScheduleController(CrewScheduleSessionService sessionService, CrewRosterService rosterService,
-            CrewScheduleEditor editor, CrewDataCache crewDataCache, Clock clock) {
+            CrewScheduleEditor editor, CrewRotationGenerator generator, ScheduleValidator validator,
+            CrewDataCache crewDataCache, Clock clock) {
         this.sessionService = sessionService;
         this.rosterService = rosterService;
         this.editor = editor;
+        this.generator = generator;
+        this.validator = validator;
         this.crewDataCache = crewDataCache;
         this.clock = clock;
     }
 
-    /** The whole version: positions with assigned employees. */
+    /** The whole version: lines, crews, employees and crew shifts. */
     @GetMapping
     public CrewSchedule get(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
@@ -79,15 +93,16 @@ public class CrewScheduleController {
     }
 
     /**
-     * All active lines (loaded at startup), sorted by name. Also works when there is no version yet,
+     * Lines that are active in the current month (loaded at startup), sorted by name. Also works when there is
+     * no version yet,
      * so the frontend can show the lines before the first "New empty month".
      */
     @GetMapping("/lines")
     public List<Line> lines() {
-        return crewDataCache.getLines();
+        return crewDataCache.getLines(YearMonth.now(clock));
     }
 
-    /** Crews of the caller's version with their lines, composition by role (read-only) and all their employees. */
+    /** Crews of the caller's version with their lines and all their employees. */
     @GetMapping("/crews")
     public List<CrewDetails> crews(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId) {
@@ -97,19 +112,87 @@ public class CrewScheduleController {
     /**
      * Reloads data from the DB and makes a new version without crew shifts for
      * {@code month} (yyyy-MM, default: the current month). Only the caller's
-     * version is replaced.
+     * version is replaced. {@code generate=true}: then generates the crew schedule of every line from scratch
+     * (the response has {@code generation}); default: the version stays empty.
      */
     @PostMapping("/init")
     public RotationResponse init(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @RequestParam(required = false) String month) {
+            @RequestParam(required = false) String month,
+            @RequestParam(defaultValue = "false") boolean generate) {
         YearMonth yearMonth;
         try {
             yearMonth = month == null || month.isBlank() ? YearMonth.now(clock) : YearMonth.parse(month);
         } catch (DateTimeParseException e) {
             throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, "month must be yyyy-MM, got: " + month);
         }
-        return toResponse(sessionId, sessionService.init(sessionId, yearMonth));
+        ScheduleVersion version = sessionService.init(sessionId, yearMonth);
+        if (!generate) {
+            return toResponse(sessionId, version);
+        }
+        return generate(sessionId, new GenerateRequest(null, null, null, false));
+    }
+
+    /**
+     * Fills the crew schedule with the rotation Day - Night - Sleep day - Day off (see
+     * {@link CrewRotationGenerator}). 400: invalid request, 404: unknown line. Places that cannot be filled stay
+     * empty and are listed in {@code generation.messages}.
+     */
+    @PostMapping("/generate")
+    public RotationResponse generate(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestBody(required = false) GenerateRequest request) {
+        GenerateResult[] result = new GenerateResult[1];
+        ScheduleVersion version = sessionService.edit(sessionId,
+                schedule -> result[0] = generator.generate(schedule, request));
+        return toResponse(sessionId, version, result[0]);
+    }
+
+    /** Pinned, unpinned and empty places from {@code from} to {@code to} (null: end of month), per line and in total. */
+    @GetMapping("/generate/preview")
+    public GeneratePreview previewGeneration(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestParam(required = false) String lineId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        GeneratePreview[] preview = new GeneratePreview[1];
+        sessionService.edit(sessionId, schedule -> preview[0] = generator.preview(schedule, lineId, from, to));
+        return preview[0];
+    }
+
+    /**
+     * Sets the sample of a line: the pinned DAY crews of 4 days in a row. Does not generate. 400: invalid sample,
+     * 404: unknown line or crew, 409: conflict with a pinned shift or another line (nothing changes).
+     */
+    @PutMapping("/lines/{lineId}/sample")
+    public RotationResponse setLineSample(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @PathVariable String lineId, @RequestBody SampleRequest request) {
+        return toResponse(sessionId, sessionService.edit(sessionId,
+                schedule -> editor.setLineSample(schedule, lineId, request)));
+    }
+
+    /**
+     * Removes the crew shifts of a line (null: all lines) in a date range, with their people changes; pinned ones
+     * only with {@code includePinned}. The response has {@code cleared}.
+     */
+    @PostMapping("/crew-shifts/clear")
+    public RotationResponse clearCrewShifts(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestBody ClearRequest request) {
+        ClearResult[] result = new ClearResult[1];
+        ScheduleVersion version = sessionService.edit(sessionId, schedule -> result[0] = editor.clearCrewShifts(schedule,
+                request.lineId(), request.from(), request.to(), request.includePinned()));
+        return toResponse(sessionId, version, null, result[0]);
+    }
+
+    /** Pins or unpins every crew shift of a line (null: all lines) in a date range. */
+    @PostMapping("/crew-shifts/pinned")
+    public RotationResponse setPinnedInRange(
+            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
+            @RequestBody BulkPinnedRequest request) {
+        return toResponse(sessionId, sessionService.edit(sessionId, schedule -> editor.setPinnedInRange(schedule,
+                request.lineId(), request.from(), request.to(), request.pinned())));
     }
 
     /** Puts a crew on a line for one shift (409 if the line shift already has a crew). */
@@ -178,35 +261,7 @@ public class CrewScheduleController {
     }
 
     /**
-     * The number of people per role for this crew shift only. An empty list: the composition of the crew again
-     * (same as DELETE).
-     */
-    @PutMapping("/crew-shifts/{crewShiftId}/composition")
-    public RotationResponse setShiftComposition(
-            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @PathVariable String crewShiftId, @RequestBody CompositionRequest request) {
-        Map<Integer, Integer> counts = new LinkedHashMap<>();
-        for (RoleCountRequest roleCount : request.roles() == null ? List.<RoleCountRequest>of() : request.roles()) {
-            if (roleCount == null || roleCount.roleId() == null || roleCount.count() == null) {
-                throw new ScheduleException(sessionId, HttpStatus.BAD_REQUEST, "roleId and count are required.");
-            }
-            counts.merge(roleCount.roleId(), roleCount.count(), Integer::sum);
-        }
-        return toResponse(sessionId, sessionService.edit(sessionId,
-                schedule -> editor.setShiftComposition(schedule, crewShiftId, counts)));
-    }
-
-    /** The crew shift has the composition of the crew again. */
-    @DeleteMapping("/crew-shifts/{crewShiftId}/composition")
-    public RotationResponse resetShiftComposition(
-            @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @PathVariable String crewShiftId) {
-        return toResponse(sessionId, sessionService.edit(sessionId,
-                schedule -> editor.setShiftComposition(schedule, crewShiftId, null)));
-    }
-
-    /**
-     * Moves an employee to another crew: changes the default composition of both crews, from {@code from} on
+     * Moves an employee to another crew: changes the employees of both crews, from {@code from} on
      * (yyyy-MM-dd, in the version's month; missing: the whole month).
      */
     @PutMapping("/employees/{employeeId}/crew")
@@ -249,14 +304,53 @@ public class CrewScheduleController {
     }
 
     private RotationResponse toResponse(String sessionId, ScheduleVersion version) {
-        Rotation rotation = rosterService.toRotation(version.schedule());
-        return new RotationResponse(sessionId, version.id(), rotation.month(), rotation.lines());
+        return toResponse(sessionId, version, null);
     }
 
-    public record RotationResponse(String sessionId, String versionId, YearMonth month, List<LineSchedule> lines) {
+    private RotationResponse toResponse(String sessionId, ScheduleVersion version, GenerateResult generation) {
+        return toResponse(sessionId, version, generation, null);
+    }
+
+    private RotationResponse toResponse(String sessionId, ScheduleVersion version, GenerateResult generation,
+            ClearResult cleared) {
+        // Read the version under its lock: another request of the same session may change it
+        synchronized (version.schedule()) {
+            Rotation rotation = rosterService.toRotation(version.schedule());
+            return new RotationResponse(sessionId, version.id(), rotation.month(), version.schedule().getShifts(),
+                    rotation.lines(), validator.validate(version.schedule()), generation, cleared);
+        }
+    }
+
+    /**
+     * @param shifts     times of the shift types (PLR_SM), e.g. for snapping a dragged crew shift
+     * @param warnings   rest rule warnings, calculated for every response (nothing is blocked)
+     * @param generation only after generating: what the generator did
+     * @param cleared    only after clearing: removed and kept pinned crew shifts
+     */
+    public record RotationResponse(String sessionId, String versionId, YearMonth month, List<ShiftTime> shifts,
+            List<LineSchedule> lines, List<ScheduleWarning> warnings,
+            @JsonInclude(JsonInclude.Include.NON_NULL) GenerateResult generation,
+            @JsonInclude(JsonInclude.Include.NON_NULL) ClearResult cleared) {
+    }
+
+    /**
+     * @param lineId        null: all lines
+     * @param from          null: the 1st of the month
+     * @param to            null: the end of the month
+     * @param includePinned true: the pinned crew shifts are removed too
+     */
+    public record ClearRequest(String lineId, LocalDate from, LocalDate to, boolean includePinned) {
     }
 
     public record PinnedRequest(boolean pinned) {
+    }
+
+    /**
+     * @param lineId null: all lines
+     * @param from   null: the 1st of the month
+     * @param to     null: the end of the month
+     */
+    public record BulkPinnedRequest(String lineId, LocalDate from, LocalDate to, boolean pinned) {
     }
 
     public record ReplacementRequest(Integer employeeId, Integer substituteId) {
@@ -266,9 +360,4 @@ public class CrewScheduleController {
     public record EmployeeCrewRequest(Integer crewId, LocalDate from) {
     }
 
-    public record CompositionRequest(List<RoleCountRequest> roles) {
-    }
-
-    public record RoleCountRequest(Integer roleId, Integer count) {
-    }
 }

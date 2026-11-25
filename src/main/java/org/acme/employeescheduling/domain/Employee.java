@@ -2,7 +2,7 @@ package org.acme.employeescheduling.domain;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -15,39 +15,40 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-/** Employee (BD_CARD.TABN). Can be assigned to a {@link Position}. */
+/** Employee (BD_CARD.TABN). */
 @Getter
 @Setter
 @NoArgsConstructor
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Employee {
 
+    /** Order of the employees of a crew: by position (employees without one last), then by name. */
+    public static final Comparator<Employee> BY_POSITION_AND_NAME = Comparator
+            .comparing(Employee::getPosition, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Employee::getFullName, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Employee::getId);
+
     @EqualsAndHashCode.Include
     private Integer id;
 
     private String fullName;
 
-    /** The crew this employee belongs to at the start of the month (PLR_TBBR). */
+    /** Position in the crew, for display (PLR_TB.POS); null: not set. */
+    private Integer position;
+
+    /** The crew this employee belongs to at the start of the month (PLR_TB). */
     private Crew crew;
 
     /** Moves to another crew during the month, sorted by date (see {@link #getCrewOn}). */
     private List<CrewChange> crewChanges = new ArrayList<>();
 
-    /** Roles this employee can perform (PLR_RLTB). */
-    private Set<Role> roles = new HashSet<>();
-
     /** Vacation, sick leave, dismissal: entered by the user, they do not overlap. */
     private List<Absence> absences = new ArrayList<>();
 
-    public Employee(Integer id, String fullName, Crew crew, Set<Role> roles) {
+    public Employee(Integer id, String fullName, Crew crew) {
         this.id = id;
         this.fullName = fullName;
         this.crew = crew;
-        this.roles = roles;
-    }
-
-    public boolean canPerform(Role role) {
-        return roles.contains(role);
     }
 
     /** The crew on {@code date}: {@link #crew}, or the crew of the last change up to that date. */

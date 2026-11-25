@@ -22,12 +22,18 @@ public class Crew {
 
     private String name;
 
-    /** People needed in this crew per shift: the sum of PLR_RLBR.NPERS over all roles of the crew. */
+    /** People needed in this crew per shift (PLR_BR.NTB). */
     private int staffCount;
 
     /**
-     * Employees of this crew (PLR_TBBR). Not in the JSON: a crew is repeated in every position,
-     * so the list would be sent thousands of times. Every employee has {@code crew} instead.
+     * The crew's own line: PLR_BR.KC (= {@link Line#getId()}), trimmed; null if not set. Only information:
+     * the user can still put the crew on any line.
+     */
+    private String lineId;
+
+    /**
+     * Employees of this crew (PLR_TB), sorted by position and name. Not in the JSON: a crew is repeated in every crew shift,
+     * so the list would be sent many times. Every employee has {@code crew} instead.
      */
     @JsonIgnore
     private List<Employee> employees = new ArrayList<>();
