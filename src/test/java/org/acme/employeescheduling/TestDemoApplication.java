@@ -61,10 +61,11 @@ public class TestDemoApplication {
                 lines.add(new Line(kc, "1706100" + line + "0000", "Линия " + line));
                 for (int number = 1; number <= 4; number++) {
                     Crew crew = new Crew(10000 + line * 10 + number, "Линия" + line + "/" + number);
-                    crew.setStaffCount(line <= 3 ? 6 : 5);
+                    // Line 6 has no PLR_BR.NTB (no norm, never a deficit); Линия4/2 is one person short
+                    crew.setStaffCount(line == 6 ? null : line <= 3 ? 6 : 5);
                     crew.setLineId(kc);
                     crews.add(crew);
-                    int people = line == 4 && number == 2 ? crew.getStaffCount() - 1 : crew.getStaffCount();
+                    int people = line == 6 ? 5 : line == 4 && number == 2 ? crew.getStaffCount() - 1 : crew.getStaffCount();
                     for (int position = 1; position <= people; position++) {
                         String name = SURNAMES[employeeId % SURNAMES.length] + " "
                                 + INITIALS[(employeeId / SURNAMES.length) % INITIALS.length];

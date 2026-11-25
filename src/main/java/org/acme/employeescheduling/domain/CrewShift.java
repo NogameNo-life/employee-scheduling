@@ -112,10 +112,17 @@ public class CrewShift {
                 .filter(employee -> employee.isUnavailableOn(date)));
     }
 
-    /** People needed in this shift: the crew's {@code staffCount}. */
+    /** People needed in this shift: the crew's {@code staffCount}; null = not set. */
     @JsonProperty
-    public int getStaffCount() {
+    public Integer getStaffCount() {
         return crew.getStaffCount();
+    }
+
+    /** Fewer people than the crew needs. Never true when the crew has no {@code staffCount}. */
+    @JsonIgnore
+    public boolean isDeficit() {
+        Integer staffCount = getStaffCount();
+        return staffCount != null && getEmployees().size() < staffCount;
     }
 
     private static Set<Integer> ids(Stream<Employee> employees) {

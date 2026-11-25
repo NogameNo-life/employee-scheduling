@@ -300,8 +300,20 @@
           Дневные бригады 4 дней подряд, минимум 3 разные. Ночные смены следуют из цепочки: ночью работает дневная
           бригада предыдущего дня. Дневные смены очереди будут закреплены.
         </p>
-        <label for="sampleFrom" class="form-label">Первый день</label>
-        <input id="sampleFrom" type="date" class="form-control mb-2">
+        <div class="row g-2">
+          <div class="col">
+            <label for="sampleFrom" class="form-label">Первый день</label>
+            <input id="sampleFrom" type="date" class="form-control">
+          </div>
+          <div class="col">
+            <label for="sampleTo" class="form-label">По дату</label>
+            <input id="sampleTo" type="date" class="form-control" aria-describedby="sampleToHint">
+          </div>
+        </div>
+        <p class="text-muted small mt-1 mb-2" id="sampleToHint">
+          До этой даты линия будет заполнена кнопкой «Поставить и заполнить линию». Кнопка «Поставить очередь» её
+          не использует.
+        </p>
         <div id="sampleDays"></div>
       </div>
       <div class="modal-footer">

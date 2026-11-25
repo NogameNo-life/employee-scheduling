@@ -226,6 +226,23 @@ class ScheduleExcelExporterTest {
     }
 
     @Test
+    void crewWithoutStaffCountHasNoDeficit() throws IOException {
+        CrewSchedule schedule = schedule(NOVEMBER);
+        CrewShift second = schedule.getCrewShifts().stream()
+                .filter(s -> s.getId().equals(NOVEMBER.atDay(2) + "-DAY-L1")).findFirst().orElseThrow();
+        second.getCrew().setStaffCount(null);
+        editor.addAbsence(schedule, second.getEmployees().get(0).getId(), new AbsenceRequest(AbsenceType.SICK_LEAVE,
+                NOVEMBER.atDay(2), NOVEMBER.atDay(2)));
+
+        try (XSSFWorkbook workbook = export(schedule, null, List.of())) {
+            Cell cell = workbook.getSheet("По линиям").getRow(FIRST_ROW).getCell(DAY_COLUMN + 1);
+            assertThat(cell.getStringCellValue()).isEqualTo("Линия1/3");
+            assertThat(fill(cell)).isNotEqualTo("FFFEF3C7");
+            assertThat(cell.getCellComment()).isNull();
+        }
+    }
+
+    @Test
     void employeesSheetHasDayCodesSubstitutesAndTotals() throws IOException {
         CrewSchedule schedule = schedule(NOVEMBER);
         // Crew 12 works NIGHT on the 1st: О on the 2nd. Employee 121 is sick on the 5th to the 6th.
