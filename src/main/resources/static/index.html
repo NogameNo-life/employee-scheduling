@@ -224,19 +224,22 @@
           <legend class="form-label fs-6 mb-1">Что выгрузить</legend>
           <div class="form-check form-check-inline">
             <input class="form-check-input" type="radio" name="exportWhat" id="exportWhatAll" value="all" checked>
-            <label class="form-check-label" for="exportWhatAll">Весь график</label>
+            <label class="form-check-label" for="exportWhatAll">По бригадам</label>
           </div>
           <div class="form-check form-check-inline">
             <input class="form-check-input" type="radio" name="exportWhat" id="exportWhatEmployees" value="employees">
-            <label class="form-check-label" for="exportWhatEmployees">Выбранные сотрудники</label>
+            <label class="form-check-label" for="exportWhatEmployees">По сотрудникам</label>
           </div>
         </fieldset>
         <div id="exportEmployeesBox" hidden>
           <div class="d-flex gap-2 align-items-center mb-2">
             <input id="exportSearch" type="search" class="form-control form-control-sm"
                    placeholder="Поиск: ФИО или табельный номер" aria-label="Поиск сотрудника">
-            <span class="text-nowrap small" id="exportCount" aria-live="polite">Выбрано: 0</span>
-            <button type="button" class="btn btn-link btn-sm p-0 text-nowrap" id="exportClearSelection">Снять выбор</button>
+            <div class="form-check text-nowrap mb-0">
+              <input class="form-check-input" type="checkbox" id="exportSelectAll">
+              <label class="form-check-label small" for="exportSelectAll">Отметить всех</label>
+            </div>
+            <span class="text-nowrap small" id="exportCount" aria-live="polite">Выбрано: 0 из 0</span>
           </div>
           <div class="export-employee-list" id="exportEmployeeList"></div>
         </div>

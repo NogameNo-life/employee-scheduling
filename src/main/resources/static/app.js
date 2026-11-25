@@ -39,9 +39,8 @@ let shiftTimes = [
 let pendingGeneration = null;
 // The period of the generation that was just sent ({from, to}), for the result toast
 let generationPeriod = null;
-// Employees chosen in the export dialog (personnel numbers) and the month they belong to
+// Employees chosen in the export dialog (personnel numbers); everybody on every open and switch to "По сотрудникам"
 const exportSelection = new Set();
-let exportSelectionMonth = null;
 // What the clear dialog is open for: {lineId, preview}
 let pendingClear = null;
 // The line of the open sample dialog
@@ -64,10 +63,16 @@ $(document).ready(function () {
   $("#bulkUnpinButton").click(() => bulkPin(false));
   $("#clearButton").click(clearFromGenerateDialog);
   $("#exportButton").click(openExportDialog);
-  $("input[name=exportWhat]").on("change", updateExportDialog);
+  $("input[name=exportWhat]").on("change", () => {
+    if (exportMode() === "employees") {
+      selectAllExportEmployees();
+    }
+    updateExportDialog();
+  });
+  // The search only filters the list, the selection stays
   $("#exportSearch").on("input", renderExportEmployees);
-  $("#exportClearSelection").click(() => {
-    exportSelection.clear();
+  $("#exportSelectAll").on("change", event => {
+    event.target.checked ? selectAllExportEmployees() : exportSelection.clear();
     updateExportChecks();
   });
   $("#exportEmployeeList").on("change", ".export-employee-check", event => {
@@ -1089,8 +1094,9 @@ function periodText(from, to) {
 
 // ----- Excel export -----
 
-// "Экспорт": period (default: the shown month, reset on every open like the generator dialog), whole schedule or
-// chosen employees. The choice of employees is kept while the month stays the same.
+// "Экспорт": period (default: the shown month, reset on every open like the generator dialog), "По бригадам" (the
+// whole schedule) or "По сотрудникам" (chosen employees; all of them are chosen on every open). The drawer button
+// "Экспорт графика сотрудника" does not open this dialog: it downloads that one employee directly.
 function openExportDialog() {
   if (lastSchedule == null) {
     showSimpleError("Нет графика для выгрузки.");
@@ -1100,11 +1106,7 @@ function openExportDialog() {
   const range = {min: month.atDay(1).toString(), max: month.atEndOfMonth().toString()};
   $("#exportFrom").val(range.min).attr(range);
   $("#exportTo").val(range.max).attr(range);
-  if (exportSelectionMonth !== shownMonth) {
-    exportSelection.clear();
-    exportSelectionMonth = shownMonth;
-    $("#exportWhatAll").prop("checked", true);
-  }
+  selectAllExportEmployees();
   $("#exportSearch").val("");
   renderExportEmployees();
   updateExportDialog();
@@ -1118,6 +1120,11 @@ function exportMode() {
 function updateExportDialog() {
   $("#exportEmployeesBox").prop("hidden", exportMode() !== "employees");
   updateExportChecks();
+}
+
+function selectAllExportEmployees() {
+  exportSelection.clear();
+  lastSchedule.employees.forEach(employee => exportSelection.add(employee.id));
 }
 
 // Employees whose crew at the start of the month is this crew, in the order of the UI
@@ -1163,7 +1170,11 @@ function updateExportChecks() {
     el.checked = employees.length > 0 && chosen === employees.length;
     el.indeterminate = chosen > 0 && chosen < employees.length;
   });
-  $("#exportCount").text(`Выбрано: ${exportSelection.size}`);
+  const total = lastSchedule.employees.length;
+  const all = $("#exportSelectAll")[0];
+  all.checked = total > 0 && exportSelection.size === total;
+  all.indeterminate = exportSelection.size > 0 && exportSelection.size < total;
+  $("#exportCount").text(`Выбрано: ${exportSelection.size} из ${total}`);
   $("#exportModalSave").prop("disabled", exportMode() === "employees" && exportSelection.size === 0);
 }
 
