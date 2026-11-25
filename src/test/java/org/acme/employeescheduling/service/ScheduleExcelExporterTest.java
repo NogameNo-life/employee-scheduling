@@ -25,6 +25,7 @@ import org.acme.employeescheduling.domain.ShiftTime;
 import org.acme.employeescheduling.domain.ShiftType;
 import org.acme.employeescheduling.service.CrewRotationGenerator.GenerateRequest;
 import org.acme.employeescheduling.service.CrewScheduleEditor.AbsenceRequest;
+import org.acme.employeescheduling.service.ScheduleExcelExporter.ExportRequest;
 import org.acme.employeescheduling.service.ScheduleValidator.ScheduleWarning;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
@@ -263,8 +264,191 @@ class ScheduleExcelExporterTest {
         }
     }
 
+    private XSSFWorkbook export(CrewSchedule schedule, ExportRequest request) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        exporter.export(schedule, request, validator.validate(schedule), out);
+        return new XSSFWorkbook(new ByteArrayInputStream(out.toByteArray()));
+    }
+
+    private static int count(EmployeeDayStatus status, Employee employee, LocalDate from, LocalDate to) {
+        return from.datesUntil(to.plusDays(1)).mapToInt(date -> status.get(employee, date).worked().size()).sum();
+    }
+
+    private static Employee employee(CrewSchedule schedule, int id) {
+        return schedule.getEmployees().stream().filter(e -> e.getId() == id).findFirst().orElseThrow();
+    }
+
+    @Test
+    void periodHasOnlyItsDayColumnsAndTotals() throws IOException {
+        CrewSchedule schedule = schedule(NOVEMBER);
+        LocalDate fifth = NOVEMBER.atDay(5);
+        LocalDate fifteenth = NOVEMBER.atDay(15);
+
+        try (XSSFWorkbook workbook = export(schedule, new ExportRequest(null, fifth, fifteenth, null))) {
+            Sheet lines = workbook.getSheet("По линиям");
+            assertThat(text(lines, 0, 0)).isEqualTo("График бригад — с 05.11.2026 по 15.11.2026");
+            assertThat(text(lines, 2, DAY_COLUMN)).isEqualTo("5\nчт");
+            assertThat(text(lines, 2, DAY_COLUMN + 10)).isEqualTo("15\nвс");
+            assertThat(text(lines, 2, DAY_COLUMN + 11)).isEqualTo("Смен");
+            // DAY on the 5th: the 5th day of the default order [11, 13, 14, 12] = 11
+            assertThat(text(lines, FIRST_ROW, DAY_COLUMN)).isEqualTo("Линия1/1");
+            assertThat(lines.getRow(FIRST_ROW).getCell(DAY_COLUMN + 11).getNumericCellValue()).isEqualTo(11);
+
+            Sheet employees = workbook.getSheet("По сотрудникам");
+            assertThat(text(employees, 2, EMPLOYEE_DAY_COLUMN + 11)).isEqualTo("Д");
+            Row row = employeeRow(employees, 111);
+            int shifts = count(EmployeeDayStatus.of(schedule), employee(schedule, 111), fifth, fifteenth);
+            assertThat(shifts).isLessThan(count(EmployeeDayStatus.of(schedule), employee(schedule, 111), DAY1,
+                    NOVEMBER.atEndOfMonth()));
+            assertThat(row.getCell(EMPLOYEE_DAY_COLUMN + 13).getNumericCellValue()).isEqualTo(shifts);
+            assertThat(row.getCell(EMPLOYEE_DAY_COLUMN + 14).getNumericCellValue()).isEqualTo(shifts * 12.0);
+        }
+    }
+
+    @Test
+    void periodMustBeInTheMonthAndInOrder() {
+        CrewSchedule schedule = schedule(NOVEMBER);
+
+        assertThatThrownBy(() -> export(schedule, new ExportRequest(null, NOVEMBER.atDay(10), NOVEMBER.atDay(9), null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("раньше даты «с»");
+        assertThatThrownBy(() -> export(schedule, new ExportRequest(null, null, NOVEMBER.plusMonths(1).atDay(1), null)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("не в месяце");
+    }
+
+    @Test
+    void chosenEmployeesWithTheirShiftsSheet() throws IOException {
+        CrewSchedule schedule = schedule(NOVEMBER);
+        editor.addAbsence(schedule, 121, new AbsenceRequest(AbsenceType.SICK_LEAVE, NOVEMBER.atDay(5),
+                NOVEMBER.atDay(6)));
+        editor.replaceEmployee(schedule, DAY1 + "-DAY-L1", 111, 141);
+
+        try (XSSFWorkbook workbook = export(schedule, new ExportRequest(null, null, null, List.of(141, 121, 121)))) {
+            assertThat(workbook.getSheet("По линиям")).isNull();
+            assertThat(workbook.getSheetName(0)).isEqualTo("По сотрудникам");
+            assertThat(workbook.getSheetName(1)).isEqualTo("Смены");
+            Sheet employees = workbook.getSheet("По сотрудникам");
+            assertThat(text(employees, 0, 0)).isEqualTo("График сотрудников — Ноябрь 2026");
+            // Grouped by crew (12 before 14), only the chosen ones
+            assertThat(text(employees, FIRST_ROW, 0)).startsWith("Линия1/2");
+            assertThat(employeeRow(employees, 121).getRowNum()).isEqualTo(FIRST_ROW + 1);
+            assertThat(text(employees, FIRST_ROW + 2, 0)).startsWith("Линия1/4");
+            assertThat(employeeRow(employees, 141).getRowNum()).isEqualTo(FIRST_ROW + 3);
+            assertThat(employeeRow(employees, 111)).isNull();
+            assertThat(employees.getLastRowNum()).isEqualTo(FIRST_ROW + 3);
+
+            Sheet shifts = workbook.getSheet("Смены");
+            assertThat(text(shifts, 2, 0)).isEqualTo("Таб. №");
+            List<Row> rows141 = new ArrayList<>();
+            List<Row> rows121 = new ArrayList<>();
+            for (Row row : shifts) {
+                if (row.getRowNum() >= FIRST_ROW && row.getCell(0).getCellType() == CellType.NUMERIC) {
+                    (row.getCell(0).getNumericCellValue() == 141 ? rows141 : rows121).add(row);
+                }
+            }
+            // The substitute shift of the 1st comes first
+            Row substitute = rows141.get(0);
+            assertThat(substitute.getCell(2).getStringCellValue()).isEqualTo("01.11.2026");
+            assertThat(substitute.getCell(3).getStringCellValue()).isEqualTo("вс");
+            assertThat(substitute.getCell(4).getStringCellValue()).isEqualTo("Д");
+            assertThat(substitute.getCell(5).getStringCellValue()).isEqualTo("08:00");
+            assertThat(substitute.getCell(6).getStringCellValue()).isEqualTo("20:00");
+            assertThat(substitute.getCell(7).getStringCellValue()).isEqualTo("Line 1");
+            assertThat(substitute.getCell(8).getStringCellValue()).isEqualTo("Линия1/1");
+            assertThat(substitute.getCell(9).getNumericCellValue()).isEqualTo(12.0);
+            assertThat(substitute.getCell(10).getStringCellValue()).isEqualTo("да");
+            assertThat(rows141.get(1).getCell(10).getStringCellValue()).isEmpty();
+            // A night shift ends the next day
+            assertThat(rows121.get(0).getCell(4).getStringCellValue()).isEqualTo("Н");
+            assertThat(rows121.get(0).getCell(6).getStringCellValue()).isEqualTo("08:00 (след. день)");
+            Row sick = rows121.stream().filter(row -> row.getCell(4).getStringCellValue().equals("Б")).findFirst()
+                    .orElseThrow();
+            assertThat(sick.getCell(2).getStringCellValue()).isEqualTo("05.11.2026 – 06.11.2026");
+            assertThat(sick.getCell(7).getStringCellValue()).isEqualTo("Больничный");
+
+            // Total rows: shifts and hours
+            int shifts141 = count(EmployeeDayStatus.of(schedule), employee(schedule, 141), DAY1, NOVEMBER.atEndOfMonth());
+            Row total = shifts.getRow(rows141.get(rows141.size() - 1).getRowNum() + 1);
+            assertThat(total.getCell(1).getStringCellValue()).startsWith("Итого Сотрудник 14-1: " + shifts141 + " смен");
+            assertThat(total.getCell(9).getNumericCellValue()).isEqualTo(shifts141 * 12.0);
+            assertThat(rows141).hasSize(shifts141);
+        }
+    }
+
+    @Test
+    void absenceRowIsCutToThePeriod() throws IOException {
+        CrewSchedule schedule = schedule(NOVEMBER);
+        editor.addAbsence(schedule, 121, new AbsenceRequest(AbsenceType.VACATION, NOVEMBER.atDay(3),
+                NOVEMBER.atDay(20)));
+        editor.addAbsence(schedule, 122, new AbsenceRequest(AbsenceType.DISMISSAL, NOVEMBER.atDay(25), null));
+
+        try (XSSFWorkbook workbook = export(schedule, new ExportRequest(null, NOVEMBER.atDay(10),
+                NOVEMBER.atDay(15), List.of(121, 122)))) {
+            Sheet shifts = workbook.getSheet("Смены");
+            List<String> codes = new ArrayList<>();
+            for (Row row : shifts) {
+                if (row.getRowNum() >= FIRST_ROW && row.getCell(0).getCellType() == CellType.NUMERIC
+                        && row.getCell(0).getNumericCellValue() == 121) {
+                    codes.add(row.getCell(4).getStringCellValue() + " " + row.getCell(2).getStringCellValue());
+                }
+            }
+            assertThat(codes).containsExactly("ОТ 10.11.2026 – 15.11.2026");
+            // The dismissal starts after the period: no row
+            for (Row row : shifts) {
+                if (row.getRowNum() >= FIRST_ROW && row.getCell(4) != null) {
+                    assertThat(row.getCell(4).getStringCellValue()).isNotEqualTo("У");
+                }
+            }
+        }
+    }
+
+    @Test
+    void warningsOnlyOfTheChosenEmployees() throws IOException {
+        CrewSchedule schedule = schedule(NOVEMBER);
+        editor.removeCrewShift(schedule, NOVEMBER.atDay(2) + "-NIGHT-L1");
+        editor.addCrewShift(schedule, new CrewScheduleEditor.CrewShiftRequest(NOVEMBER.atDay(2), ShiftType.NIGHT,
+                "L1", 13));
+
+        try (XSSFWorkbook workbook = export(schedule, new ExportRequest(null, null, null, List.of(131)))) {
+            assertThat(text(workbook.getSheet("Нарушения"), FIRST_ROW, 3)).isEqualTo("Линия1/3");
+        }
+        try (XSSFWorkbook workbook = export(schedule, new ExportRequest(null, null, null, List.of(211)))) {
+            assertThat(workbook.getSheet("Нарушения")).isNull();
+        }
+        try (XSSFWorkbook workbook = export(schedule, new ExportRequest(null, NOVEMBER.atDay(3), null, null))) {
+            assertThat(workbook.getSheet("Нарушения")).isNull();
+        }
+    }
+
+    @Test
+    void unknownEmployeeIsNotFound() {
+        CrewSchedule schedule = schedule(NOVEMBER);
+
+        assertThatThrownBy(() -> export(schedule, new ExportRequest(null, null, null, List.of(111, 999))))
+                .isInstanceOf(NoSuchElementException.class).hasMessageContaining("999");
+    }
+
     @Test
     void fileNames() {
+        LocalDate fifth = NOVEMBER.atDay(5);
+        LocalDate fifteenth = NOVEMBER.atDay(15);
+        assertThat(ScheduleExcelExporter.fileName(NOVEMBER, null, null, null, null))
+                .isEqualTo("График_бригад_2026-11.xlsx");
+        assertThat(ScheduleExcelExporter.fileName(NOVEMBER, DAY1, NOVEMBER.atEndOfMonth(), null, List.of()))
+                .isEqualTo("График_бригад_2026-11.xlsx");
+        assertThat(ScheduleExcelExporter.fileName(NOVEMBER, fifth, fifteenth, null, null))
+                .isEqualTo("График_бригад_2026-11-05_2026-11-15.xlsx");
+        assertThat(ScheduleExcelExporter.fileName(NOVEMBER, null, null, null, List.of(1001)))
+                .isEqualTo("График_сотрудников_2026-11_1001.xlsx");
+        assertThat(ScheduleExcelExporter.fileName(NOVEMBER, fifth, fifteenth, null, List.of(1001, 1002)))
+                .isEqualTo("График_сотрудников_2026-11-05_2026-11-15.xlsx");
+        assertThat(ScheduleExcelExporter.asciiFileName(NOVEMBER, fifth, fifteenth, null))
+                .isEqualTo("crew-schedule-2026-11-05_2026-11-15.xlsx");
+        assertThat(ScheduleExcelExporter.asciiFileName(NOVEMBER, null, null, List.of(1001)))
+                .isEqualTo("employee-schedule-2026-11-1001.xlsx");
+    }
+
+    @Test
+    void fileNamesOfOneLine() {
         assertThat(ScheduleExcelExporter.fileName(NOVEMBER, null)).isEqualTo("График_бригад_2026-11.xlsx");
         assertThat(ScheduleExcelExporter.fileName(NOVEMBER, "БерЦГС1")).isEqualTo("График_бригад_2026-11_БерЦГС1.xlsx");
         assertThat(ScheduleExcelExporter.asciiFileName(NOVEMBER)).isEqualTo("crew-schedule-2026-11.xlsx");

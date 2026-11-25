@@ -31,6 +31,7 @@ import org.acme.employeescheduling.service.CrewScheduleEditor.SampleRequest;
 import org.acme.employeescheduling.service.CrewScheduleSessionService;
 import org.acme.employeescheduling.service.LineSchedule;
 import org.acme.employeescheduling.service.ScheduleExcelExporter;
+import org.acme.employeescheduling.service.ScheduleExcelExporter.ExportRequest;
 import org.acme.employeescheduling.service.ScheduleValidator;
 import org.acme.employeescheduling.service.ScheduleValidator.ScheduleWarning;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -112,23 +113,30 @@ public class CrewScheduleController {
     }
 
     /**
-     * The caller's version as an Excel workbook (sheets "По линиям", "По сотрудникам", "Нарушения"), built in memory
-     * and not saved anywhere. {@code lineId}: only that line (404 if unknown). The file name has Cyrillic letters, so
+     * The caller's version as an Excel workbook, built in memory and not saved anywhere (see
+     * {@link ScheduleExcelExporter}). {@code from} / {@code to}: the period (null: the whole month; 400 if not in the
+     * month or {@code to} before {@code from}). {@code employeeIds} (comma separated): only these employees (404 if one
+     * is unknown). {@code lineId}: only that line (404 if unknown). The file name has Cyrillic letters, so
      * Content-Disposition has an ASCII {@code filename} and the real name in {@code filename*} (RFC 6266 / 5987).
      */
     @GetMapping("/export.xlsx")
     public ResponseEntity<byte[]> exportExcel(
             @RequestHeader(name = SessionHeader.HEADER, defaultValue = SessionHeader.DEFAULT_SESSION_ID) String sessionId,
-            @RequestParam(required = false) String lineId) {
+            @RequestParam(required = false) String lineId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) List<Integer> employeeIds) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         YearMonth[] month = new YearMonth[1];
+        ExportRequest request = new ExportRequest(lineId, from, to, employeeIds);
         sessionService.edit(sessionId, schedule -> {
             month[0] = schedule.getMonth();
-            excelExporter.export(schedule, lineId, validator.validate(schedule), out);
+            excelExporter.export(schedule, request, validator.validate(schedule), out);
         });
-        String name = ScheduleExcelExporter.fileName(month[0], lineId);
-        String disposition = "attachment; filename=\"" + ScheduleExcelExporter.asciiFileName(month[0])
-                + "\"; filename*=UTF-8''" + URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20");
+        String name = ScheduleExcelExporter.fileName(month[0], from, to, lineId, employeeIds);
+        String disposition = "attachment; filename=\"" + ScheduleExcelExporter.asciiFileName(month[0], from, to,
+                employeeIds) + "\"; filename*=UTF-8''" + URLEncoder.encode(name, StandardCharsets.UTF_8)
+                        .replace("+", "%20");
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(ScheduleExcelExporter.CONTENT_TYPE))
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition)

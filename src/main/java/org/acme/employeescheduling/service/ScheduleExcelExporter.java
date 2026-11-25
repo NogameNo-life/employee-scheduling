@@ -38,6 +38,7 @@ import org.apache.poi.xssf.usermodel.XSSFFont;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
 
+import org.acme.employeescheduling.domain.Absence;
 import org.acme.employeescheduling.domain.Crew;
 import org.acme.employeescheduling.domain.CrewSchedule;
 import org.acme.employeescheduling.domain.CrewShift;
@@ -63,6 +64,7 @@ public class ScheduleExcelExporter {
     static final String LINES_SHEET = "По линиям";
     static final String EMPLOYEES_SHEET = "По сотрудникам";
     static final String WARNINGS_SHEET = "Нарушения";
+    static final String SHIFTS_SHEET = "Смены";
     /** Title, "Сформировано ..." and the column header. */
     static final int HEADER_ROWS = 3;
     /** Columns before the days: "Линия", "Смена" / "№", "Таб. №", "ФИО". */
@@ -103,36 +105,87 @@ public class ScheduleExcelExporter {
         this.clock = clock;
     }
 
-    /** "График_бригад_2026-11.xlsx", with a line "График_бригад_2026-11_БерЦГС1.xlsx". */
-    public static String fileName(YearMonth month, String lineId) {
-        return "График_бригад_" + month + (lineId == null || lineId.isBlank() ? "" : "_" + lineId.trim()) + ".xlsx";
+    /**
+     * The file name: "График_бригад_2026-11.xlsx" (whole month), "График_бригад_2026-11-05_2026-11-15.xlsx" (period),
+     * "..._БерЦГС1.xlsx" (one line), "График_сотрудников_<period>.xlsx" (chosen employees; with one employee its
+     * personnel number is added: "График_сотрудников_2026-11_1001.xlsx").
+     *
+     * @param from        first day; null: the 1st of the month
+     * @param to          last day; null: the last day of the month
+     * @param employeeIds null or empty: the whole schedule
+     */
+    public static String fileName(YearMonth month, LocalDate from, LocalDate to, String lineId,
+            List<Integer> employeeIds) {
+        List<Integer> ids = cleanIds(employeeIds);
+        String period = periodName(month, from, to);
+        if (!ids.isEmpty()) {
+            return "График_сотрудников_" + period + (ids.size() == 1 ? "_" + ids.get(0) : "") + ".xlsx";
+        }
+        return "График_бригад_" + period + (lineId == null || lineId.isBlank() ? "" : "_" + lineId.trim()) + ".xlsx";
     }
 
-    /** ASCII file name for old clients: "crew-schedule-2026-11.xlsx". */
+    /** The whole month, as before. */
+    public static String fileName(YearMonth month, String lineId) {
+        return fileName(month, null, null, lineId, null);
+    }
+
+    /** ASCII file name for old clients: "crew-schedule-2026-11.xlsx", "employee-schedule-2026-11-05_2026-11-15.xlsx". */
+    public static String asciiFileName(YearMonth month, LocalDate from, LocalDate to, List<Integer> employeeIds) {
+        List<Integer> ids = cleanIds(employeeIds);
+        String period = periodName(month, from, to);
+        return ids.isEmpty() ? "crew-schedule-" + period + ".xlsx"
+                : "employee-schedule-" + period + (ids.size() == 1 ? "-" + ids.get(0) : "") + ".xlsx";
+    }
+
     public static String asciiFileName(YearMonth month) {
-        return "crew-schedule-" + month + ".xlsx";
+        return asciiFileName(month, null, null, null);
+    }
+
+    /** "2026-11" for the whole month, else "2026-11-05_2026-11-15". */
+    private static String periodName(YearMonth month, LocalDate from, LocalDate to) {
+        LocalDate first = from == null ? month.atDay(1) : from;
+        LocalDate last = to == null ? month.atEndOfMonth() : to;
+        return first.equals(month.atDay(1)) && last.equals(month.atEndOfMonth()) ? month.toString()
+                : first + "_" + last;
+    }
+
+    /** Without nulls and repeats; empty = everybody. */
+    private static List<Integer> cleanIds(List<Integer> employeeIds) {
+        return employeeIds == null ? List.of() : employeeIds.stream().filter(Objects::nonNull).distinct().toList();
+    }
+
+    /** The whole month, all employees. */
+    public void export(CrewSchedule schedule, String lineId, List<ScheduleWarning> warnings, OutputStream out) {
+        export(schedule, new ExportRequest(lineId, null, null, null), warnings, out);
     }
 
     /**
-     * @param lineId   null or blank: all lines; otherwise only this line (404 if unknown) and the employees who work on
-     *                 it in the month
+     * Writes the workbook of the request. Errors before anything is written: unknown line or employee
+     * ({@link NoSuchElementException}, 404), a date not in the month or {@code to} before {@code from}
+     * ({@link IllegalArgumentException}, 400).
+     *
      * @param warnings rest warnings of the version ({@link ScheduleValidator#validate})
      */
-    public void export(CrewSchedule schedule, String lineId, List<ScheduleWarning> warnings, OutputStream out) {
-        Line line = findLine(schedule, lineId);
-        List<Line> lines = line == null ? schedule.getLines() : List.of(line);
+    public void export(CrewSchedule schedule, ExportRequest request, List<ScheduleWarning> warnings,
+            OutputStream out) {
+        Scope scope = scope(schedule, request == null ? new ExportRequest(null, null, null, null) : request);
         try (XSSFWorkbook workbook = new XSSFWorkbook()) {
             Styles styles = new Styles(workbook);
-            String title = "График бригад — " + monthTitle(schedule.getMonth())
-                    + (line == null ? "" : " — " + lineName(line));
+            String title = (scope.employees() == null ? "График бригад — " : "График сотрудников — ")
+                    + scope.periodTitle() + (scope.line() == null ? "" : " — " + lineName(scope.line()));
             String generated = "Сформировано " + LocalDateTime.now(clock).format(DATE_TIME);
             EmployeeDayStatus status = EmployeeDayStatus.of(schedule);
 
-            writeLines(workbook.createSheet(LINES_SHEET), schedule, lines, styles, title, generated);
-            writeEmployees(workbook.createSheet(EMPLOYEES_SHEET), schedule, line, status, styles, title, generated);
-            List<ScheduleWarning> shown = warnings.stream()
-                    .filter(warning -> line == null || isOnLine(schedule, warning, line))
-                    .toList();
+            if (scope.employees() == null) {
+                List<Line> lines = scope.line() == null ? schedule.getLines() : List.of(scope.line());
+                writeLines(workbook.createSheet(LINES_SHEET), scope, lines, styles, title, generated);
+            }
+            List<Employee> employees = shownEmployees(scope, status);
+            writeEmployees(workbook.createSheet(EMPLOYEES_SHEET), scope, employees, status, styles, title, generated);
+            if (scope.employees() != null) {
+                writeShifts(workbook.createSheet(SHIFTS_SHEET), scope, employees, status, styles, title, generated);
+            }
+            List<ScheduleWarning> shown = warnings.stream().filter(warning -> isShown(scope, warning)).toList();
             if (!shown.isEmpty()) {
                 writeWarnings(workbook.createSheet(WARNINGS_SHEET), schedule, shown, styles, title, generated);
             }
@@ -142,18 +195,50 @@ public class ScheduleExcelExporter {
         }
     }
 
+    /** Checks the request and resolves its defaults. */
+    private static Scope scope(CrewSchedule schedule, ExportRequest request) {
+        YearMonth month = schedule.getMonth();
+        LocalDate from = request.from() == null ? month.atDay(1) : request.from();
+        LocalDate to = request.to() == null ? month.atEndOfMonth() : request.to();
+        if (!YearMonth.from(from).equals(month) || !YearMonth.from(to).equals(month)) {
+            throw new IllegalArgumentException("Период " + from.format(DATE) + " – " + to.format(DATE)
+                    + " не в месяце графика " + monthTitle(month).toLowerCase() + ".");
+        }
+        if (to.isBefore(from)) {
+            throw new IllegalArgumentException("Дата «по» " + to.format(DATE) + " раньше даты «с» " + from.format(DATE)
+                    + ".");
+        }
+        List<LocalDate> dates = from.datesUntil(to.plusDays(1)).toList();
+        Line line = findLine(schedule, request.lineId());
+        List<Integer> ids = cleanIds(request.employeeIds());
+        List<Employee> employees = null;
+        if (!ids.isEmpty()) {
+            Map<Integer, Employee> byId = schedule.getEmployees().stream()
+                    .collect(Collectors.toMap(Employee::getId, employee -> employee));
+            employees = new ArrayList<>();
+            for (Integer id : ids) {
+                Employee employee = byId.get(id);
+                if (employee == null) {
+                    throw new NoSuchElementException("Employee " + id + " was not found in this schedule version.");
+                }
+                employees.add(employee);
+            }
+        }
+        return new Scope(schedule, dates, line, employees);
+    }
+
     // ---------- "По линиям" ----------
 
-    private void writeLines(Sheet sheet, CrewSchedule schedule, List<Line> lines, Styles styles, String title,
+    private void writeLines(Sheet sheet, Scope scope, List<Line> lines, Styles styles, String title,
             String generated) {
-        YearMonth month = schedule.getMonth();
-        int days = month.lengthOfMonth();
-        int totalColumn = LINES_FIRST_DAY_COLUMN + days;
+        CrewSchedule schedule = scope.schedule();
+        List<LocalDate> dates = scope.dates();
+        int totalColumn = LINES_FIRST_DAY_COLUMN + dates.size();
         writeTitle(sheet, styles, title, generated);
         Row header = headerRow(sheet);
         text(header, 0, "Линия", styles.header(false));
         text(header, 1, "Смена", styles.header(false));
-        writeDayHeaders(header, month, LINES_FIRST_DAY_COLUMN, styles);
+        writeDayHeaders(header, dates, LINES_FIRST_DAY_COLUMN, styles);
         text(header, totalColumn, "Смен", styles.header(false));
 
         Map<String, CrewShift> bySlot = new HashMap<>();
@@ -166,28 +251,26 @@ public class ScheduleExcelExporter {
                 Row row = sheet.createRow(rowIndex);
                 text(row, 0, lineName(line) + (line.getName().equals(line.getId()) ? "" : "\n" + line.getId()),
                         styles.get(WHITE, TEXT, true, HorizontalAlignment.LEFT, true));
-                text(row, 1, shiftLabel(schedule.getShift(type)), styles.get(type == ShiftType.DAY
-                        ? CODE_COLORS.get(Code.DAY)[0] : CODE_COLORS.get(Code.NIGHT)[0],
-                        type == ShiftType.DAY ? CODE_COLORS.get(Code.DAY)[1] : CODE_COLORS.get(Code.NIGHT)[1],
-                        true, HorizontalAlignment.LEFT, false));
+                String[] colors = CODE_COLORS.get(type == ShiftType.DAY ? Code.DAY : Code.NIGHT);
+                text(row, 1, shiftLabel(schedule.getShift(type)),
+                        styles.get(colors[0], colors[1], true, HorizontalAlignment.LEFT, false));
                 int count = 0;
-                for (int day = 1; day <= days; day++) {
-                    LocalDate date = month.atDay(day);
+                for (int i = 0; i < dates.size(); i++) {
+                    LocalDate date = dates.get(i);
                     CrewShift shift = bySlot.get(slot(line.getId(), date, type));
-                    Cell cell;
                     if (shift == null) {
-                        cell = text(row, LINES_FIRST_DAY_COLUMN + day - 1, "", styles.get(EMPTY_ROSE, TEXT, false,
+                        text(row, LINES_FIRST_DAY_COLUMN + i, "", styles.get(EMPTY_ROSE, TEXT, false,
                                 HorizontalAlignment.CENTER, false));
-                    } else {
-                        count++;
-                        int people = shift.getEmployees().size();
-                        boolean deficit = people < shift.getStaffCount();
-                        cell = text(row, LINES_FIRST_DAY_COLUMN + day - 1, crewName(shift.getCrew()),
-                                styles.get(deficit ? DEFICIT_AMBER : weekendOr(date, WHITE), TEXT, false,
-                                        HorizontalAlignment.CENTER, false));
-                        if (deficit) {
-                            comment(sheet, drawing, cell, people + " из " + shift.getStaffCount());
-                        }
+                        continue;
+                    }
+                    count++;
+                    int people = shift.getEmployees().size();
+                    boolean deficit = people < shift.getStaffCount();
+                    Cell cell = text(row, LINES_FIRST_DAY_COLUMN + i, crewName(shift.getCrew()),
+                            styles.get(deficit ? DEFICIT_AMBER : weekendOr(date, WHITE), TEXT, false,
+                                    HorizontalAlignment.CENTER, false));
+                    if (deficit) {
+                        comment(sheet, drawing, cell, people + " из " + shift.getStaffCount());
                     }
                 }
                 number(row, totalColumn, count, styles.get(WHITE, TEXT, true, HorizontalAlignment.CENTER, false));
@@ -199,8 +282,8 @@ public class ScheduleExcelExporter {
         sheet.setColumnWidth(0, 22 * 256);
         sheet.setColumnWidth(1, 15 * 256);
         // Crew names ("Линия1/1") need more room than the employee letters
-        for (int day = 0; day < days; day++) {
-            sheet.setColumnWidth(LINES_FIRST_DAY_COLUMN + day, 9 * 256);
+        for (int i = 0; i < dates.size(); i++) {
+            sheet.setColumnWidth(LINES_FIRST_DAY_COLUMN + i, 9 * 256);
         }
         sheet.setColumnWidth(totalColumn, 7 * 256);
         sheet.createFreezePane(LINES_FIRST_DAY_COLUMN, HEADER_ROWS);
@@ -209,31 +292,37 @@ public class ScheduleExcelExporter {
 
     // ---------- "По сотрудникам" ----------
 
-    private void writeEmployees(Sheet sheet, CrewSchedule schedule, Line line, EmployeeDayStatus status,
+    /**
+     * The employees of the export, sorted by their crew at the start of the month (by id), then position and name,
+     * as in the UI: the chosen ones, or with a line the ones who work on it in the period, else everybody.
+     */
+    private static List<Employee> shownEmployees(Scope scope, EmployeeDayStatus status) {
+        return (scope.employees() == null ? scope.schedule().getEmployees() : scope.employees()).stream()
+                .filter(employee -> scope.line() == null || worksOnLine(scope, status, employee, scope.line()))
+                .sorted(Comparator.comparing((Employee employee) -> employee.getCrew().getId())
+                        .thenComparing(Employee.BY_POSITION_AND_NAME))
+                .toList();
+    }
+
+    private void writeEmployees(Sheet sheet, Scope scope, List<Employee> employees, EmployeeDayStatus status,
             Styles styles, String title, String generated) {
-        YearMonth month = schedule.getMonth();
-        int days = month.lengthOfMonth();
-        int totalsColumn = EMPLOYEES_FIRST_DAY_COLUMN + days;
+        List<LocalDate> dates = scope.dates();
+        int totalsColumn = EMPLOYEES_FIRST_DAY_COLUMN + dates.size();
         int lastColumn = totalsColumn + 3;
         writeTitle(sheet, styles, title, generated);
         Row header = headerRow(sheet);
         text(header, 0, "№", styles.header(false));
         text(header, 1, "Таб. №", styles.header(false));
         text(header, 2, "ФИО", styles.header(false));
-        writeDayHeaders(header, month, EMPLOYEES_FIRST_DAY_COLUMN, styles);
+        writeDayHeaders(header, dates, EMPLOYEES_FIRST_DAY_COLUMN, styles);
         String[] totals = { "Д", "Н", "Смен", "Часов" };
         for (int i = 0; i < totals.length; i++) {
             text(header, totalsColumn + i, totals[i], styles.header(false));
         }
 
-        // Employees grouped by their crew at the start of the month, crews by id, as in the UI
         Map<Crew, List<Employee>> byCrew = new LinkedHashMap<>();
-        schedule.getEmployees().stream()
-                .filter(employee -> line == null || worksOnLine(schedule, status, employee, line))
-                .sorted(Comparator.comparing((Employee employee) -> employee.getCrew().getId())
-                        .thenComparing(Employee.BY_POSITION_AND_NAME))
-                .forEach(employee -> byCrew.computeIfAbsent(employee.getCrew(), crew -> new ArrayList<>())
-                        .add(employee));
+        employees.forEach(employee -> byCrew.computeIfAbsent(employee.getCrew(), crew -> new ArrayList<>())
+                .add(employee));
 
         Drawing<?> drawing = sheet.createDrawingPatriarch();
         int rowIndex = HEADER_ROWS;
@@ -243,8 +332,8 @@ public class ScheduleExcelExporter {
             for (int column = 0; column <= lastColumn; column++) {
                 text(groupRow, column, "", styles.get(GROUP, TEXT, true, HorizontalAlignment.LEFT, false));
             }
-            groupRow.getCell(0).setCellValue(crewName(group.getKey()) + " — " + ownLine(schedule, group.getKey())
-                    + " · " + group.getValue().size() + " чел.");
+            groupRow.getCell(0).setCellValue(crewName(group.getKey()) + " — " + ownLine(scope.schedule(),
+                    group.getKey()) + " · " + group.getValue().size() + " чел.");
             sheet.addMergedRegion(new CellRangeAddress(rowIndex, rowIndex, 0, 2));
             rowIndex++;
             for (Employee employee : group.getValue()) {
@@ -252,42 +341,33 @@ public class ScheduleExcelExporter {
                 number(row, 0, ++number, styles.get(WHITE, TEXT, false, HorizontalAlignment.CENTER, false));
                 number(row, 1, employee.getId(), styles.get(WHITE, TEXT, false, HorizontalAlignment.CENTER, false));
                 text(row, 2, employee.getFullName(), styles.get(WHITE, TEXT, false, HorizontalAlignment.LEFT, false));
-                int dayShifts = 0;
-                int nightShifts = 0;
-                double hours = 0;
-                for (int day = 1; day <= days; day++) {
-                    LocalDate date = month.atDay(day);
+                Totals sum = new Totals();
+                for (int i = 0; i < dates.size(); i++) {
+                    LocalDate date = dates.get(i);
                     DayStatus dayStatus = status.get(employee, date);
                     String[] colors = CODE_COLORS.get(dayStatus.code());
                     boolean neutral = dayStatus.code() == Code.OFF || dayStatus.code() == Code.SLEEP;
-                    Cell cell = text(row, EMPLOYEES_FIRST_DAY_COLUMN + day - 1, dayStatus.code().getLetter(),
+                    Cell cell = text(row, EMPLOYEES_FIRST_DAY_COLUMN + i, dayStatus.code().getLetter(),
                             styles.get(neutral ? weekendOr(date, colors[0]) : colors[0], colors[1],
                                     !neutral, HorizontalAlignment.CENTER, false));
                     String note = note(dayStatus);
                     if (note != null) {
                         comment(sheet, drawing, cell, note);
                     }
-                    for (CrewShift shift : dayStatus.worked()) {
-                        if (shift.getType() == ShiftType.DAY) {
-                            dayShifts++;
-                        } else {
-                            nightShifts++;
-                        }
-                    }
-                    hours += dayStatus.hours();
+                    sum.add(dayStatus);
                 }
                 XSSFCellStyle total = styles.get(WHITE, TEXT, true, HorizontalAlignment.CENTER, false);
-                number(row, totalsColumn, dayShifts, total);
-                number(row, totalsColumn + 1, nightShifts, total);
-                number(row, totalsColumn + 2, dayShifts + nightShifts, total);
-                number(row, totalsColumn + 3, hours, styles.hours());
+                number(row, totalsColumn, sum.day, total);
+                number(row, totalsColumn + 1, sum.night, total);
+                number(row, totalsColumn + 2, sum.day + sum.night, total);
+                number(row, totalsColumn + 3, sum.hours, styles.hours());
             }
         }
         sheet.setColumnWidth(0, 5 * 256);
         sheet.setColumnWidth(1, 9 * 256);
         sheet.setColumnWidth(2, 34 * 256);
-        for (int day = 0; day < days; day++) {
-            sheet.setColumnWidth(EMPLOYEES_FIRST_DAY_COLUMN + day, (int) (4.5 * 256));
+        for (int i = 0; i < dates.size(); i++) {
+            sheet.setColumnWidth(EMPLOYEES_FIRST_DAY_COLUMN + i, (int) (4.5 * 256));
         }
         for (int i = 0; i < totals.length; i++) {
             sheet.setColumnWidth(totalsColumn + i, (i < 2 ? 5 : 7) * 256);
@@ -306,15 +386,9 @@ public class ScheduleExcelExporter {
         return notes.isEmpty() ? null : String.join("\n", notes);
     }
 
-    private static boolean worksOnLine(CrewSchedule schedule, EmployeeDayStatus status, Employee employee, Line line) {
-        YearMonth month = schedule.getMonth();
-        for (int day = 1; day <= month.lengthOfMonth(); day++) {
-            if (status.get(employee, month.atDay(day)).worked().stream()
-                    .anyMatch(shift -> shift.getLine().equals(line))) {
-                return true;
-            }
-        }
-        return false;
+    private static boolean worksOnLine(Scope scope, EmployeeDayStatus status, Employee employee, Line line) {
+        return scope.dates().stream().anyMatch(date -> status.get(employee, date).worked().stream()
+                .anyMatch(shift -> shift.getLine().equals(line)));
     }
 
     private static String ownLine(CrewSchedule schedule, Crew crew) {
@@ -323,6 +397,149 @@ public class ScheduleExcelExporter {
         }
         return schedule.getLines().stream().filter(line -> line.getId().equals(crew.getLineId())).findFirst()
                 .map(ScheduleExcelExporter::lineName).orElse(crew.getLineId());
+    }
+
+    // ---------- "Смены" (chosen employees only) ----------
+
+    /**
+     * One row per crew shift worked in the period and one per absence (its part inside the period), by date; then a
+     * total row per employee.
+     */
+    private void writeShifts(Sheet sheet, Scope scope, List<Employee> employees, EmployeeDayStatus status,
+            Styles styles, String title, String generated) {
+        writeTitle(sheet, styles, title, generated);
+        Row header = headerRow(sheet);
+        String[] columns = { "Таб. №", "ФИО", "Дата", "День недели", "Смена", "Начало", "Конец", "Линия", "Бригада",
+                "Часы", "Замена" };
+        for (int i = 0; i < columns.length; i++) {
+            text(header, i, columns[i], styles.header(false));
+        }
+        XSSFCellStyle plain = styles.get(WHITE, TEXT, false, HorizontalAlignment.LEFT, false);
+        XSSFCellStyle center = styles.get(WHITE, TEXT, false, HorizontalAlignment.CENTER, false);
+        XSSFCellStyle bold = styles.get(GROUP, TEXT, true, HorizontalAlignment.LEFT, false);
+        LocalDate first = scope.dates().get(0);
+        LocalDate last = scope.dates().get(scope.dates().size() - 1);
+        int rowIndex = HEADER_ROWS;
+        for (Employee employee : employees) {
+            // Rows of the employee by time: shifts and absences
+            List<ShiftRow> items = new ArrayList<>();
+            Totals sum = new Totals();
+            for (LocalDate date : scope.dates()) {
+                DayStatus dayStatus = status.get(employee, date);
+                sum.add(dayStatus);
+                for (CrewShift shift : dayStatus.worked()) {
+                    items.add(new ShiftRow(shift.getStart(), shift, dayStatus.substitute().contains(shift), null,
+                            null, null));
+                }
+            }
+            for (Absence absence : employee.getAbsences()) {
+                LocalDate start = absence.from().isBefore(first) ? first : absence.from();
+                LocalDate end = absence.to() == null || absence.to().isAfter(last) ? last : absence.to();
+                if (!end.isBefore(start)) {
+                    items.add(new ShiftRow(start.atStartOfDay(), null, false, absence, start, end));
+                }
+            }
+            items.sort(Comparator.comparing(ShiftRow::time));
+            for (ShiftRow item : items) {
+                Row row = sheet.createRow(rowIndex++);
+                number(row, 0, employee.getId(), center);
+                text(row, 1, employee.getFullName(), plain);
+                if (item.shift() != null) {
+                    CrewShift shift = item.shift();
+                    String[] colors = CODE_COLORS.get(shift.getType() == ShiftType.DAY ? Code.DAY : Code.NIGHT);
+                    text(row, 2, shift.getDate().format(DATE), center);
+                    text(row, 3, WEEKDAYS[shift.getDate().getDayOfWeek().getValue() - 1], center);
+                    text(row, 4, shift.getType() == ShiftType.DAY ? "Д" : "Н",
+                            styles.get(colors[0], colors[1], true, HorizontalAlignment.CENTER, false));
+                    text(row, 5, shift.getStart().format(TIME), center);
+                    text(row, 6, shift.getEnd().format(TIME)
+                            + (shift.getEnd().toLocalDate().isAfter(shift.getDate()) ? " (след. день)" : ""), center);
+                    text(row, 7, lineName(shift.getLine()), plain);
+                    text(row, 8, crewName(shift.getCrew()), plain);
+                    number(row, 9, shift.getHours(), styles.hours());
+                    text(row, 10, item.substitute() ? "да" : "", center);
+                } else {
+                    Code code = absenceCode(item.absence());
+                    String[] colors = CODE_COLORS.get(code);
+                    text(row, 2, item.from().equals(item.to()) ? item.from().format(DATE)
+                            : item.from().format(DATE) + " – " + item.to().format(DATE), center);
+                    text(row, 3, "", center);
+                    text(row, 4, code.getLetter(),
+                            styles.get(colors[0], colors[1], true, HorizontalAlignment.CENTER, false));
+                    text(row, 5, "", center);
+                    text(row, 6, "", center);
+                    text(row, 7, absenceName(code), plain);
+                    for (int column = 8; column <= 10; column++) {
+                        text(row, column, "", center);
+                    }
+                }
+            }
+            Row total = sheet.createRow(rowIndex++);
+            for (int column = 0; column < columns.length; column++) {
+                text(total, column, "", bold);
+            }
+            total.getCell(1).setCellValue("Итого " + employee.getFullName() + ": " + (sum.day + sum.night) + " "
+                    + shiftWord(sum.day + sum.night) + " (Д " + sum.day + ", Н " + sum.night + ")");
+            Cell hours = total.createCell(9);
+            hours.setCellValue(sum.hours);
+            hours.setCellStyle(styles.hoursOn(GROUP));
+        }
+        int[] widths = { 9, 34, 24, 11, 7, 8, 16, 18, 14, 7, 8 };
+        for (int i = 0; i < widths.length; i++) {
+            sheet.setColumnWidth(i, widths[i] * 256);
+        }
+        sheet.createFreezePane(2, HEADER_ROWS);
+        printSetup(sheet);
+    }
+
+    private static Code absenceCode(Absence absence) {
+        return switch (absence.type()) {
+            case SICK_LEAVE -> Code.SICK_LEAVE;
+            case VACATION -> Code.VACATION;
+            case DISMISSAL -> Code.DISMISSAL;
+            default -> Code.OTHER_ABSENCE;
+        };
+    }
+
+    private static String absenceName(Code code) {
+        return switch (code) {
+            case SICK_LEAVE -> "Больничный";
+            case VACATION -> "Отпуск";
+            case DISMISSAL -> "Увольнение";
+            default -> "Другое отсутствие";
+        };
+    }
+
+    private static String shiftWord(int count) {
+        int lastTwo = count % 100;
+        int last = count % 10;
+        if (lastTwo >= 11 && lastTwo <= 14) {
+            return "смен";
+        }
+        return last == 1 ? "смена" : last >= 2 && last <= 4 ? "смены" : "смен";
+    }
+
+    /** A row of "Смены": a worked crew shift, or an absence with its part inside the period. */
+    private record ShiftRow(LocalDateTime time, CrewShift shift, boolean substitute, Absence absence, LocalDate from,
+            LocalDate to) {
+    }
+
+    /** Day and night shifts and hours of one employee in the period. */
+    private static final class Totals {
+        int day;
+        int night;
+        double hours;
+
+        void add(DayStatus status) {
+            for (CrewShift shift : status.worked()) {
+                if (shift.getType() == ShiftType.DAY) {
+                    day++;
+                } else {
+                    night++;
+                }
+            }
+            hours += status.hours();
+        }
     }
 
     // ---------- "Нарушения" ----------
@@ -367,9 +584,25 @@ public class ScheduleExcelExporter {
                 .map(ScheduleExcelExporter::crewName).orElse(Objects.toString(warning.crewId(), ""));
     }
 
-    private static boolean isOnLine(CrewSchedule schedule, ScheduleWarning warning, Line line) {
-        return schedule.getCrewShifts().stream()
-                .anyMatch(shift -> shift.getId().equals(warning.crewShiftId()) && shift.getLine().equals(line));
+    /**
+     * A warning is shown if its crew shift is in the period (and on the line); with chosen employees only their own
+     * warnings and the crew warnings of shifts they work as crew members.
+     */
+    private static boolean isShown(Scope scope, ScheduleWarning warning) {
+        CrewShift shift = scope.schedule().getCrewShifts().stream()
+                .filter(s -> s.getId().equals(warning.crewShiftId())).findFirst().orElse(null);
+        if (shift == null || !scope.dates().contains(shift.getDate())
+                || (scope.line() != null && !shift.getLine().equals(scope.line()))) {
+            return false;
+        }
+        if (scope.employees() == null) {
+            return true;
+        }
+        if (warning.type() == WarningType.EMPLOYEE_REST) {
+            return scope.employees().stream().anyMatch(employee -> employee.getId().equals(warning.employeeId()));
+        }
+        return scope.employees().stream()
+                .anyMatch(employee -> shift.isMember(employee) && shift.getEmployees().contains(employee));
     }
 
     // ---------- Common parts ----------
@@ -386,10 +619,10 @@ public class ScheduleExcelExporter {
     }
 
     /** "1\nвс": day number and short weekday, weekends shaded. */
-    private static void writeDayHeaders(Row header, YearMonth month, int firstColumn, Styles styles) {
-        for (int day = 1; day <= month.lengthOfMonth(); day++) {
-            LocalDate date = month.atDay(day);
-            text(header, firstColumn + day - 1, day + "\n" + WEEKDAYS[date.getDayOfWeek().getValue() - 1],
+    private static void writeDayHeaders(Row header, List<LocalDate> dates, int firstColumn, Styles styles) {
+        for (int i = 0; i < dates.size(); i++) {
+            LocalDate date = dates.get(i);
+            text(header, firstColumn + i, date.getDayOfMonth() + "\n" + WEEKDAYS[date.getDayOfWeek().getValue() - 1],
                     styles.header(isWeekend(date)));
         }
     }
@@ -471,6 +704,33 @@ public class ScheduleExcelExporter {
         return crew.getName() == null ? String.valueOf(crew.getId()) : crew.getName().trim();
     }
 
+    /**
+     * What to export.
+     *
+     * @param lineId      null or blank: all lines; otherwise only this line and the employees who work on it
+     * @param from        first day; null: the 1st of the month
+     * @param to          last day; null: the last day of the month
+     * @param employeeIds null or empty: the whole schedule; otherwise only these employees (no "По линиям", a "Смены"
+     *                    sheet)
+     */
+    public record ExportRequest(String lineId, LocalDate from, LocalDate to, List<Integer> employeeIds) {
+    }
+
+    /** A checked request: the days of the period, the line (or null), the chosen employees (or null = all). */
+    private record Scope(CrewSchedule schedule, List<LocalDate> dates, Line line, List<Employee> employees) {
+
+        boolean wholeMonth() {
+            YearMonth month = schedule.getMonth();
+            return dates.get(0).equals(month.atDay(1)) && dates.get(dates.size() - 1).equals(month.atEndOfMonth());
+        }
+
+        /** "Ноябрь 2026" or "с 05.11.2026 по 15.11.2026". */
+        String periodTitle() {
+            return wholeMonth() ? monthTitle(schedule.getMonth())
+                    : "с " + dates.get(0).format(DATE) + " по " + dates.get(dates.size() - 1).format(DATE);
+        }
+    }
+
     /** One cell style per look: a workbook has at most 64000 styles, a month has thousands of cells. */
     private static final class Styles {
 
@@ -508,9 +768,15 @@ public class ScheduleExcelExporter {
         }
 
         XSSFCellStyle hours() {
-            return cache.computeIfAbsent("hours", k -> {
+            return hoursOn(WHITE);
+        }
+
+        XSSFCellStyle hoursOn(String fill) {
+            // The base style first: a nested computeIfAbsent on the same map is not allowed
+            XSSFCellStyle base = get(fill, TEXT, true, HorizontalAlignment.CENTER, false);
+            return cache.computeIfAbsent("hours|" + fill, k -> {
                 XSSFCellStyle style = workbook.createCellStyle();
-                style.cloneStyleFrom(get(WHITE, TEXT, true, HorizontalAlignment.CENTER, false));
+                style.cloneStyleFrom(base);
                 style.setDataFormat(workbook.createDataFormat().getFormat("0.##"));
                 return style;
             });

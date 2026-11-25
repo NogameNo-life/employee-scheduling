@@ -233,6 +233,41 @@ class CrewScheduleControllerTest {
     }
 
     @Test
+    void exportPeriodAndEmployees() throws Exception {
+        mvc.perform(get("/crew-schedules/export.xlsx").param("from", "2026-11-05").param("to", "2026-11-15"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition", "attachment; "
+                        + "filename=\"crew-schedule-2026-11-05_2026-11-15.xlsx\"; "
+                        + "filename*=UTF-8''" + encode("График_бригад_2026-11-05_2026-11-15.xlsx")));
+        mvc.perform(get("/crew-schedules/export.xlsx").param("from", "2026-11-15").param("to", "2026-11-05"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(containsString("раньше даты «с»")));
+        mvc.perform(get("/crew-schedules/export.xlsx").param("to", "2026-12-01"))
+                .andExpect(status().isBadRequest());
+
+        byte[] body = mvc.perform(get("/crew-schedules/export.xlsx").param("employeeIds", "100"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition", containsString(
+                        "filename*=UTF-8''" + encode("График_сотрудников_2026-11_100.xlsx"))))
+                .andReturn().getResponse().getContentAsByteArray();
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(body))) {
+            assertThat(workbook.getSheet("По линиям")).isNull();
+            assertThat(workbook.getSheet("Смены")).isNotNull();
+        }
+        mvc.perform(get("/crew-schedules/export.xlsx").param("employeeIds", "100,200"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition", containsString(
+                        "filename*=UTF-8''" + encode("График_сотрудников_2026-11.xlsx"))));
+        mvc.perform(get("/crew-schedules/export.xlsx").param("employeeIds", "100,999"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value(containsString("999")));
+        // Empty = everybody
+        mvc.perform(get("/crew-schedules/export.xlsx").param("employeeIds", ""))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition", containsString("crew-schedule-2026-11.xlsx")));
+    }
+
+    @Test
     void exportWithoutAVersionIs404() throws Exception {
         // No version at all, also no default one (e.g. the DB was not reachable at startup)
         ((Map<?, ?>) ReflectionTestUtils.getField(repository, "sessionSchedules")).clear();
