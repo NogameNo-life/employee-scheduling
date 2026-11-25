@@ -62,7 +62,6 @@ public class CrewRotationGenerator {
 
     public GenerateResult generate(CrewSchedule schedule, GenerateRequest request) {
         GenerateRequest checked = request == null ? new GenerateRequest(null, null, null, false) : request;
-        YearMonth month = schedule.getMonth();
         LocalDate from = resolveFrom(schedule, checked.from());
         LocalDate to = resolveTo(schedule, from, checked.to());
         if (checked.startCrewId() != null && checked.lineId() == null) {
