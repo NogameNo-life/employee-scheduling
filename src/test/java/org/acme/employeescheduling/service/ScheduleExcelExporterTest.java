@@ -29,6 +29,8 @@ import org.acme.employeescheduling.service.ScheduleExcelExporter.ExportRequest;
 import org.acme.employeescheduling.service.ScheduleValidator.ScheduleWarning;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.PageMargin;
 import org.apache.poi.ss.usermodel.PrintSetup;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -120,13 +122,73 @@ class ScheduleExcelExporterTest {
             assertThat(text(lines, 2, 0)).isEqualTo("Линия");
             assertThat(text(lines, 2, DAY_COLUMN)).isEqualTo("1\nвс");
             assertThat(lines.getPrintSetup().getLandscape()).isTrue();
-            assertThat(lines.getPrintSetup().getPaperSize()).isEqualTo(PrintSetup.A3_PAPERSIZE);
-            assertThat(lines.getPrintSetup().getFitWidth()).isEqualTo((short) 1);
+            assertThat(lines.getPrintSetup().getPaperSize()).isEqualTo(PrintSetup.A4_PAPERSIZE);
             assertThat(lines.getPaneInformation().isFreezePane()).isTrue();
             assertThat(lines.getRepeatingRows().formatAsString()).isEqualTo("1:3");
             // Weekend columns are shaded, weekdays not (the 1st is a Sunday, the 2nd a Monday)
-            assertThat(fill(lines.getRow(FIRST_ROW).getCell(DAY_COLUMN))).isEqualTo("FFF1F5F9");
+            assertThat(fill(lines.getRow(FIRST_ROW).getCell(DAY_COLUMN))).isEqualTo("FFF2F2F2");
+            assertThat(fill(lines.getRow(2).getCell(DAY_COLUMN))).isEqualTo("FFF2F2F2");
             assertThat(fill(lines.getRow(FIRST_ROW).getCell(DAY_COLUMN + 1))).isEqualTo("FFFFFFFF");
+        }
+    }
+
+    @Test
+    void printSetupForA4() throws IOException {
+        CrewSchedule schedule = schedule(NOVEMBER);
+
+        try (XSSFWorkbook workbook = export(schedule, null, List.of())) {
+            Sheet lines = workbook.getSheet("По линиям");
+            PrintSetup print = lines.getPrintSetup();
+            assertThat(print.getPaperSize()).isEqualTo(PrintSetup.A4_PAPERSIZE);
+            assertThat(print.getLandscape()).isTrue();
+            assertThat(lines.getHorizontallyCenter()).isTrue();
+            assertThat(lines.getMargin(PageMargin.LEFT)).isEqualTo(0.4);
+            // Break after day 15: its column is the last of the first page
+            assertThat(lines.getColumnBreaks()).containsExactly(DAY_COLUMN + 14);
+            assertThat(text(lines, 2, DAY_COLUMN + 14)).startsWith("15\n");
+            assertThat(lines.getRepeatingColumns().formatAsString()).isEqualTo("A:B");
+            assertThat(lines.getRepeatingRows().formatAsString()).isEqualTo("1:3");
+            assertThat(lines.getFitToPage()).isTrue();
+            assertThat(print.getFitWidth()).isEqualTo((short) 2);
+            assertThat(print.getFitHeight()).isEqualTo((short) 1);
+            assertThat(lines.getFooter().getCenter()).isEqualTo("Стр. &P из &N");
+            assertThat(lines.getHeader().getRight()).isEqualTo("Ноябрь 2026");
+            // Readable layout: row height, day column width, a thicker border below every line
+            assertThat(lines.getRow(FIRST_ROW).getHeightInPoints()).isEqualTo(22f);
+            assertThat(lines.getColumnWidth(DAY_COLUMN)).isEqualTo(12 * 256);
+            assertThat(lines.getRow(FIRST_ROW + 1).getCell(DAY_COLUMN).getCellStyle().getBorderBottom())
+                    .isEqualTo(BorderStyle.MEDIUM);
+            assertThat(lines.getRow(FIRST_ROW).getCell(DAY_COLUMN).getCellStyle().getBorderBottom())
+                    .isEqualTo(BorderStyle.THIN);
+
+            Sheet employees = workbook.getSheet("По сотрудникам");
+            assertThat(employees.getPrintSetup().getPaperSize()).isEqualTo(PrintSetup.A4_PAPERSIZE);
+            assertThat(employees.getPrintSetup().getLandscape()).isTrue();
+            assertThat(employees.getColumnBreaks()).containsExactly(EMPLOYEE_DAY_COLUMN + 14);
+            assertThat(employees.getRepeatingColumns().formatAsString()).isEqualTo("A:C");
+            assertThat(employees.getRepeatingRows().formatAsString()).isEqualTo("1:3");
+            assertThat(employees.getPrintSetup().getFitWidth()).isEqualTo((short) 2);
+            assertThat(employees.getPrintSetup().getFitHeight()).isZero();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({ "1, 10, 0", "1, 11, 5", "5, 14, 0", "5, 15, 5", "3, 26, 12", "1, 30, 15" })
+    void periodIsSplitInTheMiddle(int from, int to, int split) throws IOException {
+        CrewSchedule schedule = schedule(NOVEMBER);
+
+        try (XSSFWorkbook workbook = export(schedule,
+                new ExportRequest(null, NOVEMBER.atDay(from), NOVEMBER.atDay(to), null))) {
+            Sheet lines = workbook.getSheet("По линиям");
+            if (split == 0) {
+                assertThat(lines.getColumnBreaks()).isEmpty();
+                assertThat(lines.getPrintSetup().getFitWidth()).isEqualTo((short) 1);
+            } else {
+                assertThat(lines.getColumnBreaks()).containsExactly(DAY_COLUMN + split - 1);
+                assertThat(lines.getPrintSetup().getFitWidth()).isEqualTo((short) 2);
+            }
+            assertThat(lines.getHeader().getRight()).isEqualTo(from == 1 && to == 30 ? "Ноябрь 2026"
+                    : String.format("с %02d.11.2026 по %02d.11.2026", from, to));
         }
     }
 
@@ -150,11 +212,13 @@ class ScheduleExcelExporterTest {
             assertThat(text(lines, FIRST_ROW, DAY_COLUMN)).isEqualTo("Линия1/1");
             assertThat(text(lines, FIRST_ROW + 1, DAY_COLUMN)).isEqualTo("Линия1/2");
             Cell empty = lines.getRow(FIRST_ROW).getCell(DAY_COLUMN + 2);
-            assertThat(empty.getStringCellValue()).isEmpty();
+            assertThat(empty.getStringCellValue()).isEqualTo("—");
             assertThat(fill(empty)).isEqualTo("FFFFE4E6");
             Cell deficit = lines.getRow(FIRST_ROW).getCell(DAY_COLUMN + 1);
             assertThat(fill(deficit)).isEqualTo("FFFEF3C7");
             assertThat(deficit.getCellComment().getString().getString()).isEqualTo("1 из 2");
+            // Markers for black-and-white printers
+            assertThat(deficit.getStringCellValue()).isEqualTo("Линия1/3 !");
             // Shifts of the row in the month
             assertThat(lines.getRow(FIRST_ROW).getCell(DAY_COLUMN + 30).getNumericCellValue()).isEqualTo(29);
             assertThat(lines.getRow(FIRST_ROW + 2).getCell(DAY_COLUMN).getStringCellValue()).isEqualTo("Линия2/1");

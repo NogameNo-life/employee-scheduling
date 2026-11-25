@@ -27,6 +27,7 @@ import org.apache.poi.ss.usermodel.CreationHelper;
 import org.apache.poi.ss.usermodel.Drawing;
 import org.apache.poi.ss.usermodel.FillPatternType;
 import org.apache.poi.ss.usermodel.HorizontalAlignment;
+import org.apache.poi.ss.usermodel.PageMargin;
 import org.apache.poi.ss.usermodel.PrintSetup;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -70,6 +71,9 @@ public class ScheduleExcelExporter {
     /** Columns before the days: "Линия", "Смена" / "№", "Таб. №", "ФИО". */
     static final int LINES_FIRST_DAY_COLUMN = 2;
     static final int EMPLOYEES_FIRST_DAY_COLUMN = 3;
+    /** "По линиям": day column width in characters and row height in points (readable on A4). */
+    static final int LINES_DAY_WIDTH = 12;
+    static final float LINES_ROW_HEIGHT = 22;
 
     private static final String[] MONTHS = { "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август",
             "Сентябрь", "Октябрь", "Ноябрь", "Декабрь" };
@@ -80,8 +84,19 @@ public class ScheduleExcelExporter {
 
     // Colors of DESIGN.md / style.css (shift tints); "rose" and "amber" a bit stronger, so they are seen on paper
     private static final String WHITE = "ffffff";
-    private static final String WEEKEND = "f1f5f9";
-    private static final String BORDER = "cbd5e1";
+    /** Light enough to print as a pale grey (the old slate tint printed dark grey). */
+    private static final String WEEKEND = "f2f2f2";
+    /** Thin borders that still print on a black-and-white printer. */
+    private static final String BORDER = "a6a6a6";
+    /** The thicker border between two lines on "По линиям". */
+    private static final String LINE_BORDER = "404040";
+    /** Markers for black-and-white printers (the tints alone do not print): empty place, deficit. */
+    static final String EMPTY_MARK = "—";
+    static final String DEFICIT_MARK = " !";
+    /** Narrow margins: about 1 cm, in inches. */
+    private static final double MARGIN = 0.4;
+    /** A period of up to this many days is printed on one page wide. */
+    static final int ONE_PAGE_DAYS = 10;
     private static final String TEXT = "0f172a";
     private static final String EMPTY_ROSE = "ffe4e6";
     private static final String DEFICIT_AMBER = "fef3c7";
@@ -187,7 +202,7 @@ public class ScheduleExcelExporter {
             }
             List<ScheduleWarning> shown = warnings.stream().filter(warning -> isShown(scope, warning)).toList();
             if (!shown.isEmpty()) {
-                writeWarnings(workbook.createSheet(WARNINGS_SHEET), schedule, shown, styles, title, generated);
+                writeWarnings(workbook.createSheet(WARNINGS_SHEET), scope, shown, styles, title, generated);
             }
             workbook.write(out);
         } catch (IOException e) {
@@ -249,31 +264,36 @@ public class ScheduleExcelExporter {
         for (Line line : lines) {
             for (ShiftType type : ShiftType.values()) {
                 Row row = sheet.createRow(rowIndex);
+                row.setHeightInPoints(LINES_ROW_HEIGHT);
+                // The NIGHT row is the last row of the line: a thicker border below it
+                boolean last = type == ShiftType.NIGHT;
                 text(row, 0, lineName(line) + (line.getName().equals(line.getId()) ? "" : "\n" + line.getId()),
-                        styles.get(WHITE, TEXT, true, HorizontalAlignment.LEFT, true));
+                        styles.get(WHITE, TEXT, true, HorizontalAlignment.LEFT, true, last));
                 String[] colors = CODE_COLORS.get(type == ShiftType.DAY ? Code.DAY : Code.NIGHT);
                 text(row, 1, shiftLabel(schedule.getShift(type)),
-                        styles.get(colors[0], colors[1], true, HorizontalAlignment.LEFT, false));
+                        styles.get(colors[0], colors[1], true, HorizontalAlignment.LEFT, false, last));
                 int count = 0;
                 for (int i = 0; i < dates.size(); i++) {
                     LocalDate date = dates.get(i);
                     CrewShift shift = bySlot.get(slot(line.getId(), date, type));
                     if (shift == null) {
-                        text(row, LINES_FIRST_DAY_COLUMN + i, "", styles.get(EMPTY_ROSE, TEXT, false,
-                                HorizontalAlignment.CENTER, false));
+                        text(row, LINES_FIRST_DAY_COLUMN + i, EMPTY_MARK, styles.get(EMPTY_ROSE, TEXT, false,
+                                HorizontalAlignment.CENTER, false, last));
                         continue;
                     }
                     count++;
                     int people = shift.getEmployees().size();
                     boolean deficit = people < shift.getStaffCount();
-                    Cell cell = text(row, LINES_FIRST_DAY_COLUMN + i, crewName(shift.getCrew()),
-                            styles.get(deficit ? DEFICIT_AMBER : weekendOr(date, WHITE), TEXT, false,
-                                    HorizontalAlignment.CENTER, false));
+                    Cell cell = text(row, LINES_FIRST_DAY_COLUMN + i,
+                            crewName(shift.getCrew()) + (deficit ? DEFICIT_MARK : ""),
+                            styles.get(deficit ? DEFICIT_AMBER : weekendOr(date, WHITE), TEXT, deficit,
+                                    HorizontalAlignment.CENTER, false, last));
                     if (deficit) {
                         comment(sheet, drawing, cell, people + " из " + shift.getStaffCount());
                     }
                 }
-                number(row, totalColumn, count, styles.get(WHITE, TEXT, true, HorizontalAlignment.CENTER, false));
+                number(row, totalColumn, count,
+                        styles.get(WHITE, TEXT, true, HorizontalAlignment.CENTER, false, last));
                 rowIndex++;
             }
             // The line name once for its two rows
@@ -281,13 +301,14 @@ public class ScheduleExcelExporter {
         }
         sheet.setColumnWidth(0, 22 * 256);
         sheet.setColumnWidth(1, 15 * 256);
-        // Crew names ("Линия1/1") need more room than the employee letters
+        // The longest crew name with the deficit mark ("Линия1/1 !") at 10 pt, without wrapping
         for (int i = 0; i < dates.size(); i++) {
-            sheet.setColumnWidth(LINES_FIRST_DAY_COLUMN + i, 9 * 256);
+            sheet.setColumnWidth(LINES_FIRST_DAY_COLUMN + i, LINES_DAY_WIDTH * 256);
         }
         sheet.setColumnWidth(totalColumn, 7 * 256);
         sheet.createFreezePane(LINES_FIRST_DAY_COLUMN, HEADER_ROWS);
-        printSetup(sheet);
+        // All lines on one page tall (6 lines = 12 rows)
+        printSetup(sheet, scope, LINES_FIRST_DAY_COLUMN, (short) 1);
     }
 
     // ---------- "По сотрудникам" ----------
@@ -373,7 +394,7 @@ public class ScheduleExcelExporter {
             sheet.setColumnWidth(totalsColumn + i, (i < 2 ? 5 : 7) * 256);
         }
         sheet.createFreezePane(EMPLOYEES_FIRST_DAY_COLUMN, HEADER_ROWS);
-        printSetup(sheet);
+        printSetup(sheet, scope, EMPLOYEES_FIRST_DAY_COLUMN, (short) 0);
     }
 
     /** Comment of a day cell: substitute shifts, shifts the employee was taken off; null if nothing to say. */
@@ -489,7 +510,7 @@ public class ScheduleExcelExporter {
             sheet.setColumnWidth(i, widths[i] * 256);
         }
         sheet.createFreezePane(2, HEADER_ROWS);
-        printSetup(sheet);
+        printSetup(sheet, scope, 0, (short) 0);
     }
 
     private static Code absenceCode(Absence absence) {
@@ -544,8 +565,9 @@ public class ScheduleExcelExporter {
 
     // ---------- "Нарушения" ----------
 
-    private void writeWarnings(Sheet sheet, CrewSchedule schedule, List<ScheduleWarning> warnings, Styles styles,
+    private void writeWarnings(Sheet sheet, Scope scope, List<ScheduleWarning> warnings, Styles styles,
             String title, String generated) {
+        CrewSchedule schedule = scope.schedule();
         writeTitle(sheet, styles, title, generated);
         Row header = headerRow(sheet);
         String[] columns = { "Дата", "Смена", "Линия", "Бригада / сотрудник", "Отдых, ч", "Сообщение" };
@@ -572,7 +594,7 @@ public class ScheduleExcelExporter {
             sheet.setColumnWidth(i, widths[i] * 256);
         }
         sheet.createFreezePane(0, HEADER_ROWS);
-        printSetup(sheet);
+        printSetup(sheet, scope, 0, (short) 0);
     }
 
     private static String who(CrewSchedule schedule, ScheduleWarning warning) {
@@ -627,16 +649,55 @@ public class ScheduleExcelExporter {
         }
     }
 
-    /** Landscape A3, one page wide, the header rows on every page. */
-    private static void printSetup(Sheet sheet) {
+    /**
+     * The day after which the printed page is split: the middle of the period (day 15 of a month); 0: no split (a
+     * period of {@value #ONE_PAGE_DAYS} days or less).
+     */
+    static int splitAfterDays(int days) {
+        return days <= ONE_PAGE_DAYS ? 0 : days / 2;
+    }
+
+    /**
+     * A4 landscape, margins about 1 cm, centered horizontally, header rows (and the label columns of a day sheet) on
+     * every page, "Стр. N из M" in the footer, the period on the right of the header. A day sheet is split into two
+     * pages wide after the middle day ({@link #splitAfterDays}).
+     *
+     * <p>
+     * Note: Excel ignores manual page breaks while "Fit to" scaling is on. The column break is still written (it is
+     * used if the user switches to a fixed scale), and with equal day columns and the label columns repeated, "fit to
+     * 2 pages wide" puts the automatic break in the same place.
+     *
+     * @param labelColumns columns before the days, repeated on every page; 0: not a day sheet (one page wide)
+     * @param pagesTall    1: one page tall; 0: as many pages as needed
+     */
+    private static void printSetup(Sheet sheet, Scope scope, int labelColumns, short pagesTall) {
         PrintSetup print = sheet.getPrintSetup();
+        print.setPaperSize(PrintSetup.A4_PAPERSIZE);
         print.setLandscape(true);
-        print.setPaperSize(PrintSetup.A3_PAPERSIZE);
+        sheet.setMargin(PageMargin.LEFT, MARGIN);
+        sheet.setMargin(PageMargin.RIGHT, MARGIN);
+        sheet.setMargin(PageMargin.TOP, MARGIN + 0.2);
+        sheet.setMargin(PageMargin.BOTTOM, MARGIN + 0.2);
+        sheet.setMargin(PageMargin.HEADER, 0.25);
+        sheet.setMargin(PageMargin.FOOTER, 0.25);
+        sheet.setHorizontallyCenter(true);
+        int pagesWide = 1;
+        if (labelColumns > 0) {
+            int split = splitAfterDays(scope.dates().size());
+            if (split > 0) {
+                // Inclusive: the column of the last day of the first page
+                sheet.setColumnBreak(labelColumns + split - 1);
+                pagesWide = 2;
+            }
+            sheet.setRepeatingColumns(new CellRangeAddress(-1, -1, 0, labelColumns - 1));
+        }
+        sheet.setRepeatingRows(new CellRangeAddress(0, HEADER_ROWS - 1, -1, -1));
         sheet.setFitToPage(true);
         sheet.setAutobreaks(true);
-        print.setFitWidth((short) 1);
-        print.setFitHeight((short) 0);
-        sheet.setRepeatingRows(new CellRangeAddress(0, HEADER_ROWS - 1, -1, -1));
+        print.setFitWidth((short) pagesWide);
+        print.setFitHeight(pagesTall);
+        sheet.getHeader().setRight(scope.periodTitle());
+        sheet.getFooter().setCenter("Стр. &P из &N");
     }
 
     private static void comment(Sheet sheet, Drawing<?> drawing, Cell cell, String text) {
@@ -742,7 +803,13 @@ public class ScheduleExcelExporter {
         }
 
         XSSFCellStyle get(String fill, String fontColor, boolean bold, HorizontalAlignment align, boolean wrap) {
-            String key = fill + "|" + fontColor + "|" + bold + "|" + align + "|" + wrap;
+            return get(fill, fontColor, bold, align, wrap, false);
+        }
+
+        /** @param thickBottom a thicker, darker bottom border (the last row of a line on "По линиям") */
+        XSSFCellStyle get(String fill, String fontColor, boolean bold, HorizontalAlignment align, boolean wrap,
+                boolean thickBottom) {
+            String key = fill + "|" + fontColor + "|" + bold + "|" + align + "|" + wrap + "|" + thickBottom;
             return cache.computeIfAbsent(key, k -> {
                 XSSFCellStyle style = workbook.createCellStyle();
                 style.setFillForegroundColor(color(fill));
@@ -750,9 +817,15 @@ public class ScheduleExcelExporter {
                 style.setAlignment(align);
                 style.setVerticalAlignment(VerticalAlignment.CENTER);
                 style.setWrapText(wrap);
-                for (BorderStyleSetter setter : BorderStyleSetter.values()) {
-                    setter.set(style, color(BORDER));
-                }
+                XSSFColor thin = color(BORDER);
+                style.setBorderTop(BorderStyle.THIN);
+                style.setTopBorderColor(thin);
+                style.setBorderLeft(BorderStyle.THIN);
+                style.setLeftBorderColor(thin);
+                style.setBorderRight(BorderStyle.THIN);
+                style.setRightBorderColor(thin);
+                style.setBorderBottom(thickBottom ? BorderStyle.MEDIUM : BorderStyle.THIN);
+                style.setBottomBorderColor(thickBottom ? color(LINE_BORDER) : thin);
                 XSSFFont font = workbook.createFont();
                 font.setFontName("Arial");
                 font.setFontHeightInPoints((short) 10);
@@ -764,7 +837,7 @@ public class ScheduleExcelExporter {
         }
 
         XSSFCellStyle header(boolean weekend) {
-            return get(weekend ? "e2e8f0" : "f8fafc", TEXT, true, HorizontalAlignment.CENTER, true);
+            return get(weekend ? WEEKEND : "f8fafc", TEXT, true, HorizontalAlignment.CENTER, true);
         }
 
         XSSFCellStyle hours() {
@@ -798,32 +871,6 @@ public class ScheduleExcelExporter {
             return new XSSFColor(new byte[] { (byte) Integer.parseInt(hex.substring(0, 2), 16),
                     (byte) Integer.parseInt(hex.substring(2, 4), 16),
                     (byte) Integer.parseInt(hex.substring(4, 6), 16) }, null);
-        }
-    }
-
-    /** Thin light borders on all four sides. */
-    private enum BorderStyleSetter {
-        TOP, BOTTOM, LEFT, RIGHT;
-
-        void set(XSSFCellStyle style, XSSFColor color) {
-            switch (this) {
-                case TOP -> {
-                    style.setBorderTop(BorderStyle.THIN);
-                    style.setTopBorderColor(color);
-                }
-                case BOTTOM -> {
-                    style.setBorderBottom(BorderStyle.THIN);
-                    style.setBottomBorderColor(color);
-                }
-                case LEFT -> {
-                    style.setBorderLeft(BorderStyle.THIN);
-                    style.setLeftBorderColor(color);
-                }
-                case RIGHT -> {
-                    style.setBorderRight(BorderStyle.THIN);
-                    style.setRightBorderColor(color);
-                }
-            }
         }
     }
 }
