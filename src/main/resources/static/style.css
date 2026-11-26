@@ -33,6 +33,9 @@
   --night-border: #ede9fe;
   --night-text: #5b21b6;
   --night-dot: #7c3aed;
+  --sleep-bg: #e0f2fe;
+  --sleep-border: #7dd3fc;
+  --sleep-text: #075985;
   --off-bg: #fafaf9;
   --off-border: #e7e5e4;
   --off-text: #44403c;
@@ -74,8 +77,9 @@
 
   /* Layout */
   --drawer-width: 420px;
-  --line-column: 168px;
-  --day-column: 124px;
+  --line-column: 140px;
+  --day-column: 104px;
+  --card-height: 26px;
   --employee-column: 236px;
   --employee-day: 38px;
 
@@ -211,14 +215,40 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-sm) var(--space-lg);
-  padding: var(--space-sm) var(--space-lg);
-  margin-bottom: var(--space-lg);
+  gap: 6px 14px;
+  padding: 6px var(--space-lg);
+  margin-bottom: var(--space-sm);
   color: var(--c-text-muted);
+  font-size: 12px;
 }
 
-.legend-item { display: inline-flex; align-items: center; gap: 6px; }
-.legend-hint { margin-left: auto; color: var(--c-text-subtle); font-size: 12px; }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* The hint takes the rest of the line (cut with "…", full text in the title); it wraps only below 160 px */
+.legend-hint {
+  flex: 1 1 0;
+  min-width: 160px;
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-subtle);
+  font-size: 12px;
+}
+/* A letter with its corner markers ("По сотрудникам" cells and legend): off-marker top left, warn-marker top right */
+.cell-badge { position: relative; display: inline-block; vertical-align: middle; }
+.legend .cell-badge .code { min-width: 26px; }
+/* A small shift card in the legend of "По линиям" */
+.shift-card.legend-card {
+  display: inline-flex;
+  width: auto;
+  min-width: 34px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  cursor: default;
+}
+.shift-card.legend-card:hover { filter: none; }
 
 /* Shift letter badges (legend and "By employee" cells) */
 .code {
@@ -239,7 +269,8 @@ body {
 
 .code-day { background: var(--day-bg); border-color: var(--day-border); color: var(--day-text); }
 .code-night { background: var(--night-bg); border-color: var(--night-border); color: var(--night-text); }
-.code-sleep { background: var(--off-bg); border-color: var(--off-border); color: var(--off-text); }
+/* "О" (sleep day after a night) must differ from "В" (day off, the quietest code) */
+.code-sleep { background: var(--sleep-bg); border-color: var(--sleep-border); color: var(--sleep-text); font-weight: 600; }
 .code-off { background: var(--c-surface); border-color: var(--c-border); color: var(--c-text-subtle); font-weight: 500; }
 .code-sick { background: var(--sick-bg); border-color: var(--sick-border); color: var(--sick-text); }
 .code-vacation { background: var(--vacation-bg); border-color: var(--vacation-border); color: var(--vacation-text); }
@@ -261,7 +292,8 @@ body {
 
 .grid-scroll {
   overflow: auto;
-  max-height: calc(100vh - 230px);
+  /* --grid-top (the top of the grid on the page: header + legend) is measured by app.js (fitGridHeight) */
+  max-height: calc(100vh - var(--grid-top, 200px) - var(--space-lg));
   min-height: 240px;
 }
 
@@ -302,14 +334,18 @@ body {
 .day-head {
   min-width: var(--day-column);
   width: var(--day-column);
+  max-width: var(--day-column);
   text-align: center;
-  padding: 6px 4px !important;
+  padding: 2px 4px !important;
+  line-height: 15px;
+  white-space: nowrap;
 }
 
-.day-head .day-number { font-size: 15px; font-weight: 600; color: var(--c-text); }
-.day-head .day-week { font-size: 11px; color: var(--c-text-subtle); text-transform: uppercase; margin-left: 4px; }
-.day-head.weekend .day-week { color: var(--c-error); }
-.day-head .day-people { display: block; font-size: 11px; color: var(--c-text-subtle); }
+.day-head .day-number { font-size: 13px; font-weight: 600; color: var(--c-text); }
+.day-head .day-week { font-size: 11px; color: var(--c-text-subtle); text-transform: uppercase; margin-left: 3px; }
+.day-head.weekend { background: #f1f5f9; }
+.day-head.weekend .day-week { color: var(--c-error); font-weight: 600; }
+.day-head .day-people { display: block; font-size: 11px; line-height: 15px; color: var(--c-text-subtle); }
 .day-head .day-people.short { color: var(--deficit-text); font-weight: 600; }
 .day-head.today, td.today { background: var(--today-bg) !important; }
 .day-head.today .day-number, .day-head.today .day-week { color: var(--today-text); }
@@ -318,22 +354,29 @@ body {
 .line-head {
   min-width: var(--line-column);
   width: var(--line-column);
-  padding: var(--space-md) !important;
+  max-width: var(--line-column);
+  padding: 6px var(--space-sm) !important;
+  vertical-align: middle !important;
+  text-align: left;
 }
 
-.line-name { font-size: 15px; font-weight: 600; line-height: 22px; }
-.line-code { font-size: 12px; color: var(--c-text-subtle); }
+.line-name { font-size: 13px; font-weight: 600; line-height: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.line-code { font-size: 11px; line-height: 15px; color: var(--c-text-subtle); }
 
-.line-cell { padding: 6px !important; }
-.line-cell .shift-card + .shift-card { margin-top: 6px; }
+.line-cell { padding: 3px !important; }
+.line-cell .shift-card + .shift-card { margin-top: 3px; }
 
+/* One line: dot, crew, people, lock. Day / night and the times are in the tooltip, the drawer and the legend */
 .shift-card {
   position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   width: 100%;
-  min-height: 52px;
-  padding: 6px 8px;
+  height: var(--card-height);
+  padding: 0 5px;
   text-align: left;
+  white-space: nowrap;
   border-radius: var(--r);
   border: 1px solid var(--c-border);
   background: var(--c-surface);
@@ -348,17 +391,15 @@ body {
 .shift-card[draggable="true"] { cursor: grab; }
 .shift-card.day { background: var(--day-bg); border-color: var(--day-border); }
 .shift-card.night { background: var(--night-bg); border-color: var(--night-border); }
-.shift-card .dot { display: inline-block; width: 6px; height: 6px; border-radius: var(--r-full); margin-right: 5px; vertical-align: middle; }
+.shift-card .dot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: var(--r-full); }
 .shift-card.day .dot { background: var(--day-dot); }
 .shift-card.night .dot { background: var(--night-dot); }
-.shift-card .crew { font-weight: 600; }
-.shift-card .time { color: var(--c-text-muted); margin-left: 4px; }
-.shift-card .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 3px; color: var(--c-text-muted); }
-.shift-card .people { font-weight: 600; color: var(--c-text); }
-.shift-card .pin { position: absolute; top: 5px; right: 6px; color: var(--c-primary); font-size: 11px; }
+.shift-card .crew { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.shift-card .people { margin-left: auto; color: var(--c-text-muted); }
+.shift-card .pin { flex: 0 0 auto; color: var(--c-primary); font-size: 10px; }
 .shift-card.deficit { background: var(--deficit-bg); border-color: #fda4af; }
-.shift-card.deficit .people { color: var(--deficit-text); }
-.shift-card.rest-warning { border: 1.5px solid var(--warning); box-shadow: 0 0 0 1px var(--warning-bg); }
+.shift-card.deficit .people { color: var(--deficit-text); font-weight: 600; }
+.shift-card.rest-warning { border: 1.5px solid var(--warning); padding: 0 4.5px; box-shadow: 0 0 0 1px var(--warning-bg); }
 .shift-card.selected { outline: 2px solid var(--c-primary); outline-offset: 1px; }
 
 .shift-card.empty {
@@ -417,12 +458,31 @@ body {
 .emp-cell { text-align: center; padding: 4px 2px !important; cursor: pointer; position: relative; }
 .emp-cell:hover .code { filter: brightness(0.96); }
 .emp-cell .code { min-width: 30px; }
-.emp-cell .code.substitute { border-style: dashed; border-color: currentColor; }
-.emp-cell .code.not-working { text-decoration: line-through; opacity: 0.55; }
-.emp-cell .warn-marker {
+.code.substitute { border-style: dashed; border-color: currentColor; }
+/* Taken off a shift of the own crew: must be seen at a glance (rose, thick red line, icon in the corner) */
+.code.not-working {
+  background: var(--deficit-bg);
+  border-color: var(--deficit-text);
+  color: var(--deficit-text);
+  text-decoration: line-through;
+  text-decoration-color: var(--c-error);
+  text-decoration-thickness: 2px;
+}
+.off-marker {
   position: absolute;
-  top: 3px;
-  right: 3px;
+  top: -5px;
+  left: -6px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--deficit-text);
+  background: var(--c-surface);
+  border-radius: var(--r-full);
+  padding: 1px;
+}
+.warn-marker {
+  position: absolute;
+  top: -3px;
+  right: -3px;
   width: 7px;
   height: 7px;
   border-radius: var(--r-full);
@@ -431,6 +491,25 @@ body {
 }
 
 .empty-state { padding: var(--space-xl); color: var(--c-text-subtle); text-align: center; }
+
+/* ---------- Scrolling the days ---------- */
+.grid-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 4px var(--space-sm);
+  border-bottom: 1px solid var(--c-border);
+}
+.grid-nav .btn { height: 26px; padding: 0 8px; font-size: 12px; line-height: 24px; }
+.grid-nav-range { margin-left: var(--space-sm); color: var(--c-text-subtle); font-size: 12px; }
+.grid-scroll:focus { outline: none; }
+.grid-scroll:focus-visible { outline: 2px solid var(--c-tertiary); outline-offset: -2px; }
+/* Drag to pan: empty parts of the grid and the day header (cards and employee cells keep their own cursor) */
+.grid-scroll .line-cell,
+.grid-scroll thead th,
+.grid-scroll .crew-row td { cursor: grab; }
+.grid-scroll.panning,
+.grid-scroll.panning * { cursor: grabbing !important; user-select: none; }
 
 /* ---------- Drawer ---------- */
 .drawer {

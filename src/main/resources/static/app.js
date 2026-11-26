@@ -14,6 +14,9 @@ const ABSENCES = {
   DISMISSAL: {code: "У", name: "Увольнение", css: "code-dismissal"},
   OTHER: {code: "ПР", name: "Другое отсутствие", css: "code-other"}
 };
+// Corner markers of a "По сотрудникам" cell (also in the legend)
+const OFF_MARKER = `<span class="off-marker fas fa-user-minus" aria-hidden="true"></span>`;
+const WARN_MARKER = `<span class="warn-marker"></span>`;
 
 // ---------- State ----------
 // The whole version (GET /crew-schedules) and the rest warnings of the last answer (RotationResponse)
@@ -121,6 +124,10 @@ $(document).ready(function () {
   $("#shiftEmployeeModalSave").click(saveShiftEmployee);
   $("#shiftEmployeeModalSelect").on("change", updateShiftEmployeeButton);
   $("#drawerClose").click(closeDrawer);
+  $(window).on("resize", () => {
+    fitGridHeight();
+    updateDayScrolling();
+  });
 
   // Grid events (the grid is drawn again after every change, so the handlers are delegated)
   const grid = $("#gridScroll");
@@ -130,7 +137,11 @@ $(document).ready(function () {
     openCrewPicker({date: card.data("date"), type: card.data("type"), lineId: String(card.data("line"))});
   });
   grid.on("click", ".line-menu-button", event => toggleLineMenu($(event.currentTarget)));
-  grid.on("scroll", closeLineMenu);
+  grid.on("scroll", () => {
+    closeLineMenu();
+    updateDayScrolling();
+  });
+  setupDayScrolling(grid[0]);
   grid.on("click", ".emp-label", event => openDrawer("employee", $(event.currentTarget).data("employee")));
   grid.on("click", ".emp-cell", event => {
     const cell = $(event.currentTarget);
@@ -296,6 +307,7 @@ function renderAll() {
   buildIndex();
   renderHeader();
   renderLegend();
+  fitGridHeight();
   renderGrid();
   renderStats();
   renderDrawer();
@@ -316,22 +328,48 @@ function renderHeader() {
     .find(".text").text(`${deficits} ${plural(deficits, "смена", "смены", "смен")} с дефицитом`);
 }
 
+// The legend shows what the current view draws: cards in "По линиям", letters in "По сотрудникам"
 function renderLegend() {
-  const items = [
+  const items = view === "lines" ? [
+    legendCard("day", `<span class="dot"></span>`, shiftLabel("DAY")),
+    legendCard("night", `<span class="dot"></span>`, shiftLabel("NIGHT")),
+    legendCard("day", `<span class="pin fas fa-lock"></span>`, "закреплена"),
+    legendCard("day deficit", `<span class="people">5/6</span>`, "не хватает людей"),
+    legendCard("day rest-warning", "", "нарушение отдыха"),
+    legendCard("empty", `<span class="fas fa-plus"></span>`, "нет бригады")
+  ] : [
     legendItem("Д", "code-day", shiftLabel("DAY")),
     legendItem("Н", "code-night", shiftLabel("NIGHT")),
     legendItem("О", "code-sleep", "Отсыпной"),
     legendItem("В", "code-off", "Выходной"),
-    ...Object.values(ABSENCES).map(absence => legendItem(absence.code, absence.css, absence.name))
+    ...Object.values(ABSENCES).map(absence => legendItem(absence.code, absence.css, absence.name)),
+    legendItem("Д", "code-day not-working", "Снят со смены", OFF_MARKER),
+    legendItem("Д", "code-day substitute", "Замена"),
+    legendItem("Д", "code-day", "Нарушение отдыха", WARN_MARKER)
   ];
   const hint = view === "lines"
-    ? "Нажмите на смену — подробности. Перетащите смену на смену той же линии и типа — обмен бригадами, на пустую — перенос."
-    : "Нажмите на сотрудника — карточка сотрудника, на клетку — изменить его смену в этот день.";
-  $("#legend").html(items.join("") + `<span class="legend-hint">${escapeHtml(hint)}</span>`);
+    ? "Нажмите на смену — подробности. Перетащите на смену той же линии и типа — обмен бригадами, на пустую — перенос."
+    : "ФИО — карточка сотрудника, клетка — изменить смену в этот день.";
+  $("#legend").html(items.join("")
+    + `<span class="legend-hint" title="${escapeHtml(hint)}">${escapeHtml(hint)}</span>`);
 }
 
-function legendItem(code, css, text) {
-  return `<span class="legend-item"><span class="code ${css}">${escapeHtml(code)}</span>${escapeHtml(text)}</span>`;
+function legendItem(code, css, text, marker = "") {
+  return `<span class="legend-item"><span class="cell-badge"><span class="code ${css}">${escapeHtml(code)}</span>${marker}</span>`
+    + `${escapeHtml(text)}</span>`;
+}
+
+// A small shift card (only for the legend: no data-id, so the grid events do not apply)
+function legendCard(classes, content, text) {
+  return `<span class="legend-item"><span class="shift-card legend-card ${classes}" aria-hidden="true">${content}</span>`
+    + `${escapeHtml(text)}</span>`;
+}
+
+// The top of the grid on the page (header + legend) can change (the toolbar wraps on narrow screens),
+// so it is measured: the grid then fills the rest of the window and scrolls inside
+function fitGridHeight() {
+  const top = document.getElementById("gridScroll").getBoundingClientRect().top + window.scrollY;
+  document.documentElement.style.setProperty("--grid-top", `${Math.round(top)}px`);
 }
 
 function renderGrid() {
@@ -350,6 +388,143 @@ function renderGrid() {
   if (drawer != null && drawer.kind === "shift") {
     container.find(`.shift-card[data-id="${cssEscape(drawer.id)}"]`).addClass("selected");
   }
+  updateDayScrolling();
+}
+
+// ----- Scrolling the days (both views) -----
+// Wheel: in "По линиям" without vertical overflow the wheel scrolls the days; otherwise the browser default
+// (vertical, Shift + wheel horizontal). Buttons: a week back / forward, today. Arrows: one day. Drag to pan on
+// the empty parts of the grid and on the day header (never on shift cards or employee cells).
+
+// The day header cells of the grid (one per day, in order)
+function dayHeads() {
+  return document.querySelectorAll("#gridScroll thead th[data-date]");
+}
+
+// Width of the sticky first column: a day is "visible" only to the right of it
+function stickyWidth() {
+  const corner = document.querySelector("#gridScroll thead .sticky-col");
+  return corner == null ? 0 : corner.offsetWidth;
+}
+
+// Index of the first day that is (mostly) visible
+function firstVisibleDay() {
+  const grid = document.getElementById("gridScroll");
+  const left = grid.scrollLeft + stickyWidth();
+  const heads = [...dayHeads()];
+  const index = heads.findIndex(head => head.offsetLeft + head.offsetWidth / 2 > left);
+  return Math.max(0, index);
+}
+
+function scrollToDay(dayIndex, smooth = true) {
+  const heads = dayHeads();
+  if (heads.length === 0) {
+    return;
+  }
+  const head = heads[Math.max(0, Math.min(heads.length - 1, dayIndex))];
+  document.getElementById("gridScroll").scrollTo({left: head.offsetLeft - stickyWidth(), behavior: smooth ? "smooth" : "auto"});
+}
+
+function scrollDays(days, smooth = true) {
+  scrollToDay(firstVisibleDay() + days, smooth);
+}
+
+function gridHasVerticalOverflow(grid) {
+  return grid.scrollHeight > grid.clientHeight + 1;
+}
+
+// Buttons and the visible days ("01–14") follow the scroll position
+function updateDayScrolling() {
+  const grid = document.getElementById("gridScroll");
+  const heads = [...dayHeads()];
+  const maxLeft = grid.scrollWidth - grid.clientWidth;
+  const today = JSJoda.LocalDate.now().toString();
+  $("#weekBackButton").prop("disabled", heads.length === 0 || grid.scrollLeft <= 0);
+  $("#weekForwardButton").prop("disabled", heads.length === 0 || grid.scrollLeft >= maxLeft - 1);
+  const hasToday = heads.some(head => head.dataset.date === today);
+  $("#todayButton").prop("disabled", !hasToday)
+    .attr("title", hasToday ? "Сегодня — первый видимый день" : "Сегодняшнего дня нет в показанном месяце");
+  if (heads.length > 0) {
+    const right = grid.scrollLeft + grid.clientWidth;
+    const first = firstVisibleDay();
+    let last = first;
+    heads.forEach((head, i) => {
+      if (head.offsetLeft + head.offsetWidth / 2 <= right) {
+        last = i;
+      }
+    });
+    $("#visibleDays").text(`Дни ${dayNumber(heads[first].dataset.date)}–${dayNumber(heads[last].dataset.date)}`);
+  } else {
+    $("#visibleDays").text("");
+  }
+}
+
+function setupDayScrolling(grid) {
+  grid.addEventListener("wheel", event => {
+    // Only a plain vertical wheel turn (trackpad gestures with a horizontal part stay as they are)
+    if (view !== "lines" || event.shiftKey || event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0
+      || gridHasVerticalOverflow(grid)) {
+      return;
+    }
+    const maxLeft = grid.scrollWidth - grid.clientWidth;
+    const canScroll = event.deltaY > 0 ? grid.scrollLeft < maxLeft - 1 : grid.scrollLeft > 0;
+    if (!canScroll) {
+      return; // First / last day: the page scrolls
+    }
+    event.preventDefault();
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 40
+      : (event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? grid.clientWidth : 1);
+    grid.scrollLeft += event.deltaY * unit;
+  }, {passive: false});
+
+  grid.addEventListener("keydown", event => {
+    if ((event.key !== "ArrowLeft" && event.key !== "ArrowRight") || event.altKey || event.ctrlKey || event.metaKey
+      || document.querySelector(".modal.show") != null) {
+      return;
+    }
+    event.preventDefault();
+    scrollDays(event.key === "ArrowRight" ? 1 : -1, false);
+  });
+
+  // Drag to pan (mouse events: touch scrolls by itself)
+  let pan = null;
+  grid.addEventListener("mousedown", event => {
+    if (event.button !== 0
+      || event.target.closest(".shift-card, .emp-cell, .emp-label, button, a, input, select, label") != null) {
+      return;
+    }
+    event.preventDefault(); // No text selection while panning
+    grid.focus({preventScroll: true});
+    pan = {x: event.clientX, left: grid.scrollLeft, moved: false};
+  });
+  document.addEventListener("mousemove", event => {
+    if (pan == null) {
+      return;
+    }
+    const dx = event.clientX - pan.x;
+    if (!pan.moved && Math.abs(dx) > 3) {
+      pan.moved = true;
+      grid.classList.add("panning");
+    }
+    if (pan.moved) {
+      grid.scrollLeft = pan.left - dx;
+    }
+  });
+  const endPan = () => {
+    pan = null;
+    grid.classList.remove("panning");
+  };
+  document.addEventListener("mouseup", endPan);
+  window.addEventListener("blur", endPan);
+
+  $("#weekBackButton").click(() => scrollDays(-7));
+  $("#weekForwardButton").click(() => scrollDays(7));
+  $("#todayButton").click(() => {
+    const index = [...dayHeads()].findIndex(head => head.dataset.date === JSJoda.LocalDate.now().toString());
+    if (index >= 0) {
+      scrollToDay(index);
+    }
+  });
 }
 
 // ----- "По линиям" -----
@@ -376,10 +551,9 @@ function linesGridHtml() {
       text = `${peopleWithNorm} / ${needed}`;
       title = `Людей / нужно в сменах бригад с нормой (PLR_BR.NTB). Всего людей в сменах дня: ${people}`;
     }
-    return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col">
-      <span class="day-number">${dayNumber(date)}</span><span class="day-week">${weekday(date)}</span>
-      <span class="day-people${short ? " short" : ""}" title="${title}">${text}</span>
-    </th>`;
+    return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col" data-date="${date}"><span
+      class="day-number">${dayNumber(date)}</span><span class="day-week">${weekday(date)}</span><span
+      class="day-people${short ? " short" : ""}" title="${title}">${text.replace(" / ", "/")}</span></th>`;
   }).join("");
   const rows = index.lines.map(line => {
     const cells = index.days.map(date => `<td class="line-cell${date === today ? " today" : ""}">`
@@ -412,6 +586,7 @@ function shiftCardHtml(line, date, type) {
   if (shift.pinned) {
     classes.push("pinned");
   }
+  // The card has no room for the shift type and times: they are in the tooltip (and the drawer)
   const tooltip = [`${crewName(shift.crew)}, ${shiftLabel(type)}, ${formatDate(date)}`,
     hasStaffCount(shift) ? `Людей: ${shift.employeeIds.length} из ${shift.staffCount}`
       : `Людей: ${shift.employeeIds.length} (норма бригады не задана в PLR_BR.NTB)`,
@@ -419,11 +594,8 @@ function shiftCardHtml(line, date, type) {
     ...warnings.map(warning => warning.message)].join("\n");
   return `<button type="button" class="${classes.join(" ")}" data-id="${escapeHtml(shift.id)}"
       draggable="${!shift.pinned}" title="${escapeHtml(tooltip)}">
-    <span class="dot"></span><span class="crew">${escapeHtml(crewName(shift.crew))}</span><span class="time">${timeOf(type).start}</span>
-    ${shift.pinned ? `<span class="pin fas fa-lock" aria-label="Закреплена"></span>` : ""}
-    <span class="meta"><span>${type === "DAY" ? "Дневная" : "Ночная"}</span>
-      <span class="people"><span class="fas fa-user-friends me-1"></span>${peopleText(shift)}</span></span>
-  </button>`;
+<span class="dot"></span><span class="crew">${escapeHtml(crewName(shift.crew))}</span><span
+    class="people">${peopleText(shift)}</span>${shift.pinned ? `<span class="pin fas fa-lock" aria-label="Закреплена"></span>` : ""}</button>`;
 }
 
 // ----- Drag and drop: onto a card of the same line and shift type = swap the crews, onto an empty card = move -----
@@ -502,7 +674,7 @@ function moveCrewShift(shift, slot) {
 function employeesGridHtml() {
   const today = JSJoda.LocalDate.now().toString();
   const head = index.days.map(date => `<th class="emp-day-head${weekendClass(date)}${date === today ? " today" : ""}"
-    scope="col">${dayNumber(date)}<span class="day-week">${weekday(date)}</span></th>`).join("");
+    scope="col" data-date="${date}">${dayNumber(date)}<span class="day-week">${weekday(date)}</span></th>`).join("");
   const employeesByCrew = new Map();
   lastSchedule.employees.forEach(employee => pushTo(employeesByCrew, employee.crew.id, employee));
   const rows = [...lastSchedule.crews].sort((a, b) => a.id - b.id).map(crew => {
@@ -526,9 +698,10 @@ function employeeRowHtml(employee, today) {
   const warned = new Set((index.employeeWarnings.get(employee.id) || []).map(warning => warning.crewShiftId));
   const cells = index.days.map(date => {
     const cell = employeeCell(employee, date);
-    const marker = cell.shifts.some(shift => warned.has(shift.id)) ? `<span class="warn-marker"></span>` : "";
+    const marker = (cell.takenOff ? OFF_MARKER : "")
+      + (cell.shifts.some(shift => warned.has(shift.id)) ? WARN_MARKER : "");
     return `<td class="emp-cell${date === today ? " today" : ""}" data-employee="${employee.id}" data-date="${date}"
-      title="${escapeHtml(cell.title)}"><span class="code ${cell.css}">${escapeHtml(cell.code)}</span>${marker}</td>`;
+      title="${escapeHtml(cell.title)}"><span class="cell-badge"><span class="code ${cell.css}">${escapeHtml(cell.code)}</span>${marker}</span></td>`;
   }).join("");
   return `<tr>${label}${cells}</tr>`;
 }
@@ -557,7 +730,7 @@ function employeeCell(employee, date) {
   if (day.off.length > 0) {
     const shift = day.off[0];
     return {
-      shifts: [], code: shift.type === "DAY" ? "Д" : "Н",
+      shifts: [], takenOff: true, code: shift.type === "DAY" ? "Д" : "Н",
       css: (shift.type === "DAY" ? "code-day" : "code-night") + " not-working",
       title: `Снят со смены: ${shiftLabel(shift.type)}, ${shift.line.name}. Нажмите, чтобы вернуть.`
     };
@@ -650,7 +823,7 @@ function scrollToFirst(kind) {
   }
   let element = kind === "deficit"
     ? $("#gridScroll .shift-card.deficit").first()
-    : (view === "lines" ? $("#gridScroll .shift-card.rest-warning").first() : $("#gridScroll .warn-marker").first().parent());
+    : (view === "lines" ? $("#gridScroll .shift-card.rest-warning").first() : $("#gridScroll .warn-marker").first().closest(".emp-cell"));
   if (element.length === 0 && kind === "warning" && view !== "lines") {
     setView("lines");
     element = $("#gridScroll .shift-card.rest-warning").first();

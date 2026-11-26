@@ -70,7 +70,19 @@
 
   <div class="workspace">
     <section class="panel grid-panel" aria-label="График">
-      <div class="grid-scroll" id="gridScroll"></div>
+      <!-- Scrolling the days: a week back / forward, today as the first visible day -->
+      <div class="grid-nav" role="toolbar" aria-label="Листать дни">
+        <button type="button" class="btn btn-sm btn-outline-dark" id="weekBackButton" title="На 7 дней назад">
+          <span class="fas fa-chevron-left me-1"></span>Неделя
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-dark" id="todayButton">Сегодня</button>
+        <button type="button" class="btn btn-sm btn-outline-dark" id="weekForwardButton" title="На 7 дней вперёд">
+          Неделя<span class="fas fa-chevron-right ms-1"></span>
+        </button>
+        <span class="grid-nav-range" id="visibleDays"></span>
+      </div>
+      <!-- tabindex: Left / Right arrows scroll by one day when the grid has the focus -->
+      <div class="grid-scroll" id="gridScroll" tabindex="0" role="region" aria-label="График: стрелки влево и вправо — листать дни"></div>
     </section>
 
     <aside class="panel drawer" id="drawer" hidden aria-label="Подробности">
