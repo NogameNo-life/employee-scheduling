@@ -350,7 +350,8 @@ function renderLegend() {
   const hint = view === "lines"
     ? "Нажмите на смену — подробности. Перетащите на смену той же линии и типа — обмен бригадами, на пустую — перенос."
     : "ФИО — карточка сотрудника, клетка — изменить смену в этот день.";
-  $("#legend").html(items.join("") + `<span class="legend-wheel"><span class="fas fa-mouse me-1"></span><span id="wheelHint"></span></span>`
+  const wheel = view === "lines" ? "Колесо мыши — листать дни" : "Shift + колесо — листать дни";
+  $("#legend").html(items.join("") + `<span class="legend-wheel"><span class="fas fa-mouse me-1"></span>${escapeHtml(wheel)}</span>`
     + `<span class="legend-hint" title="${escapeHtml(hint)}">${escapeHtml(hint)}</span>`);
 }
 
@@ -433,7 +434,7 @@ function gridHasVerticalOverflow(grid) {
   return grid.scrollHeight > grid.clientHeight + 1;
 }
 
-// Buttons, the visible days ("01–14") and the wheel hint follow the scroll position and the view
+// Buttons and the visible days ("01–14") follow the scroll position
 function updateDayScrolling() {
   const grid = document.getElementById("gridScroll");
   const heads = [...dayHeads()];
@@ -457,8 +458,6 @@ function updateDayScrolling() {
   } else {
     $("#visibleDays").text("");
   }
-  const wheelScrollsDays = view === "lines" && !gridHasVerticalOverflow(grid);
-  $("#wheelHint").text(wheelScrollsDays ? "Колесо мыши — листать дни" : "Shift + колесо — листать дни");
 }
 
 function setupDayScrolling(grid) {
