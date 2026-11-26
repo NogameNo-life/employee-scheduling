@@ -14,6 +14,9 @@ const ABSENCES = {
   DISMISSAL: {code: "У", name: "Увольнение", css: "code-dismissal"},
   OTHER: {code: "ПР", name: "Другое отсутствие", css: "code-other"}
 };
+// Corner markers of a "По сотрудникам" cell (also in the legend)
+const OFF_MARKER = `<span class="off-marker fas fa-user-minus" aria-hidden="true"></span>`;
+const WARN_MARKER = `<span class="warn-marker"></span>`;
 
 // ---------- State ----------
 // The whole version (GET /crew-schedules) and the rest warnings of the last answer (RotationResponse)
@@ -121,6 +124,7 @@ $(document).ready(function () {
   $("#shiftEmployeeModalSave").click(saveShiftEmployee);
   $("#shiftEmployeeModalSelect").on("change", updateShiftEmployeeButton);
   $("#drawerClose").click(closeDrawer);
+  $(window).on("resize", fitGridHeight);
 
   // Grid events (the grid is drawn again after every change, so the handlers are delegated)
   const grid = $("#gridScroll");
@@ -296,6 +300,7 @@ function renderAll() {
   buildIndex();
   renderHeader();
   renderLegend();
+  fitGridHeight();
   renderGrid();
   renderStats();
   renderDrawer();
@@ -316,22 +321,47 @@ function renderHeader() {
     .find(".text").text(`${deficits} ${plural(deficits, "смена", "смены", "смен")} с дефицитом`);
 }
 
+// The legend shows what the current view draws: cards in "По линиям", letters in "По сотрудникам"
 function renderLegend() {
-  const items = [
+  const items = view === "lines" ? [
+    legendCard("day", `<span class="dot"></span>`, shiftLabel("DAY")),
+    legendCard("night", `<span class="dot"></span>`, shiftLabel("NIGHT")),
+    legendCard("day", `<span class="pin fas fa-lock"></span>`, "закреплена"),
+    legendCard("day deficit", `<span class="people">5/6</span>`, "не хватает людей"),
+    legendCard("day rest-warning", "", "нарушение отдыха"),
+    legendCard("empty", `<span class="fas fa-plus"></span>`, "нет бригады")
+  ] : [
     legendItem("Д", "code-day", shiftLabel("DAY")),
     legendItem("Н", "code-night", shiftLabel("NIGHT")),
     legendItem("О", "code-sleep", "Отсыпной"),
     legendItem("В", "code-off", "Выходной"),
-    ...Object.values(ABSENCES).map(absence => legendItem(absence.code, absence.css, absence.name))
+    ...Object.values(ABSENCES).map(absence => legendItem(absence.code, absence.css, absence.name)),
+    legendItem("Д", "code-day not-working", "Снят со смены", OFF_MARKER),
+    legendItem("Д", "code-day substitute", "Замена"),
+    legendItem("Д", "code-day", "Нарушение отдыха", WARN_MARKER)
   ];
   const hint = view === "lines"
-    ? "Нажмите на смену — подробности. Перетащите смену на смену той же линии и типа — обмен бригадами, на пустую — перенос."
-    : "Нажмите на сотрудника — карточка сотрудника, на клетку — изменить его смену в этот день.";
-  $("#legend").html(items.join("") + `<span class="legend-hint">${escapeHtml(hint)}</span>`);
+    ? "Нажмите на смену — подробности. Перетащите на смену той же линии и типа — обмен бригадами, на пустую — перенос."
+    : "ФИО — карточка сотрудника, клетка — изменить смену в этот день.";
+  $("#legend").html(items.join("") + `<span class="legend-hint" title="${escapeHtml(hint)}">${escapeHtml(hint)}</span>`);
 }
 
-function legendItem(code, css, text) {
-  return `<span class="legend-item"><span class="code ${css}">${escapeHtml(code)}</span>${escapeHtml(text)}</span>`;
+function legendItem(code, css, text, marker = "") {
+  return `<span class="legend-item"><span class="cell-badge"><span class="code ${css}">${escapeHtml(code)}</span>${marker}</span>`
+    + `${escapeHtml(text)}</span>`;
+}
+
+// A small shift card (only for the legend: no data-id, so the grid events do not apply)
+function legendCard(classes, content, text) {
+  return `<span class="legend-item"><span class="shift-card legend-card ${classes}" aria-hidden="true">${content}</span>`
+    + `${escapeHtml(text)}</span>`;
+}
+
+// The top of the grid on the page (header + legend) can change (the toolbar wraps on narrow screens),
+// so it is measured: the grid then fills the rest of the window and scrolls inside
+function fitGridHeight() {
+  const top = document.getElementById("gridScroll").getBoundingClientRect().top + window.scrollY;
+  document.documentElement.style.setProperty("--grid-top", `${Math.round(top)}px`);
 }
 
 function renderGrid() {
@@ -376,10 +406,9 @@ function linesGridHtml() {
       text = `${peopleWithNorm} / ${needed}`;
       title = `Людей / нужно в сменах бригад с нормой (PLR_BR.NTB). Всего людей в сменах дня: ${people}`;
     }
-    return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col">
-      <span class="day-number">${dayNumber(date)}</span><span class="day-week">${weekday(date)}</span>
-      <span class="day-people${short ? " short" : ""}" title="${title}">${text}</span>
-    </th>`;
+    return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col"><span
+      class="day-number">${dayNumber(date)}</span><span class="day-week">${weekday(date)}</span><span
+      class="day-people${short ? " short" : ""}" title="${title}">${text.replace(" / ", "/")}</span></th>`;
   }).join("");
   const rows = index.lines.map(line => {
     const cells = index.days.map(date => `<td class="line-cell${date === today ? " today" : ""}">`
@@ -412,6 +441,7 @@ function shiftCardHtml(line, date, type) {
   if (shift.pinned) {
     classes.push("pinned");
   }
+  // The card has no room for the shift type and times: they are in the tooltip (and the drawer)
   const tooltip = [`${crewName(shift.crew)}, ${shiftLabel(type)}, ${formatDate(date)}`,
     hasStaffCount(shift) ? `Людей: ${shift.employeeIds.length} из ${shift.staffCount}`
       : `Людей: ${shift.employeeIds.length} (норма бригады не задана в PLR_BR.NTB)`,
@@ -419,11 +449,8 @@ function shiftCardHtml(line, date, type) {
     ...warnings.map(warning => warning.message)].join("\n");
   return `<button type="button" class="${classes.join(" ")}" data-id="${escapeHtml(shift.id)}"
       draggable="${!shift.pinned}" title="${escapeHtml(tooltip)}">
-    <span class="dot"></span><span class="crew">${escapeHtml(crewName(shift.crew))}</span><span class="time">${timeOf(type).start}</span>
-    ${shift.pinned ? `<span class="pin fas fa-lock" aria-label="Закреплена"></span>` : ""}
-    <span class="meta"><span>${type === "DAY" ? "Дневная" : "Ночная"}</span>
-      <span class="people"><span class="fas fa-user-friends me-1"></span>${peopleText(shift)}</span></span>
-  </button>`;
+<span class="dot"></span><span class="crew">${escapeHtml(crewName(shift.crew))}</span><span
+    class="people">${peopleText(shift)}</span>${shift.pinned ? `<span class="pin fas fa-lock" aria-label="Закреплена"></span>` : ""}</button>`;
 }
 
 // ----- Drag and drop: onto a card of the same line and shift type = swap the crews, onto an empty card = move -----
@@ -526,9 +553,10 @@ function employeeRowHtml(employee, today) {
   const warned = new Set((index.employeeWarnings.get(employee.id) || []).map(warning => warning.crewShiftId));
   const cells = index.days.map(date => {
     const cell = employeeCell(employee, date);
-    const marker = cell.shifts.some(shift => warned.has(shift.id)) ? `<span class="warn-marker"></span>` : "";
+    const marker = (cell.takenOff ? OFF_MARKER : "")
+      + (cell.shifts.some(shift => warned.has(shift.id)) ? WARN_MARKER : "");
     return `<td class="emp-cell${date === today ? " today" : ""}" data-employee="${employee.id}" data-date="${date}"
-      title="${escapeHtml(cell.title)}"><span class="code ${cell.css}">${escapeHtml(cell.code)}</span>${marker}</td>`;
+      title="${escapeHtml(cell.title)}"><span class="cell-badge"><span class="code ${cell.css}">${escapeHtml(cell.code)}</span>${marker}</span></td>`;
   }).join("");
   return `<tr>${label}${cells}</tr>`;
 }
@@ -557,7 +585,7 @@ function employeeCell(employee, date) {
   if (day.off.length > 0) {
     const shift = day.off[0];
     return {
-      shifts: [], code: shift.type === "DAY" ? "Д" : "Н",
+      shifts: [], takenOff: true, code: shift.type === "DAY" ? "Д" : "Н",
       css: (shift.type === "DAY" ? "code-day" : "code-night") + " not-working",
       title: `Снят со смены: ${shiftLabel(shift.type)}, ${shift.line.name}. Нажмите, чтобы вернуть.`
     };
@@ -650,7 +678,7 @@ function scrollToFirst(kind) {
   }
   let element = kind === "deficit"
     ? $("#gridScroll .shift-card.deficit").first()
-    : (view === "lines" ? $("#gridScroll .shift-card.rest-warning").first() : $("#gridScroll .warn-marker").first().parent());
+    : (view === "lines" ? $("#gridScroll .shift-card.rest-warning").first() : $("#gridScroll .warn-marker").first().closest(".emp-cell"));
   if (element.length === 0 && kind === "warning" && view !== "lines") {
     setView("lines");
     element = $("#gridScroll .shift-card.rest-warning").first();
