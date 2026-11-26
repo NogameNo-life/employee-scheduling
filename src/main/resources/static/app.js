@@ -350,8 +350,7 @@ function renderLegend() {
   const hint = view === "lines"
     ? "Нажмите на смену — подробности. Перетащите на смену той же линии и типа — обмен бригадами, на пустую — перенос."
     : "ФИО — карточка сотрудника, клетка — изменить смену в этот день.";
-  const wheel = view === "lines" ? "Колесо мыши — листать дни" : "Shift + колесо — листать дни";
-  $("#legend").html(items.join("") + `<span class="legend-wheel"><span class="fas fa-mouse me-1"></span>${escapeHtml(wheel)}</span>`
+  $("#legend").html(items.join("")
     + `<span class="legend-hint" title="${escapeHtml(hint)}">${escapeHtml(hint)}</span>`);
 }
 

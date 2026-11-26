@@ -502,7 +502,6 @@ body {
 }
 .grid-nav .btn { height: 26px; padding: 0 8px; font-size: 12px; line-height: 24px; }
 .grid-nav-range { margin-left: var(--space-sm); color: var(--c-text-subtle); font-size: 12px; }
-.legend-wheel { color: var(--c-text-muted); font-size: 12px; white-space: nowrap; }
 .grid-scroll:focus { outline: none; }
 .grid-scroll:focus-visible { outline: 2px solid var(--c-tertiary); outline-offset: -2px; }
 /* Drag to pan: empty parts of the grid and the day header (cards and employee cells keep their own cursor) */
