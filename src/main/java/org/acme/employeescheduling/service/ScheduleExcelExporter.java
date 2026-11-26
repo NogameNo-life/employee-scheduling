@@ -108,7 +108,7 @@ public class ScheduleExcelExporter {
             Code.DAY, new String[] { "f0fdfa", "115e59" },
             Code.NIGHT, new String[] { "f5f3ff", "5b21b6" },
             Code.DAY_AND_NIGHT, new String[] { "f5f3ff", "5b21b6" },
-            Code.SLEEP, new String[] { "fafaf9", "44403c" },
+            Code.SLEEP, new String[] { "e0f2fe", "075985" },
             Code.OFF, new String[] { WHITE, "75777d" },
             Code.SICK_LEAVE, new String[] { "fff1f2", "9f1239" },
             Code.VACATION, new String[] { "fffbeb", "92400e" },
@@ -368,7 +368,9 @@ public class ScheduleExcelExporter {
                     LocalDate date = dates.get(i);
                     DayStatus dayStatus = status.get(employee, date);
                     String[] colors = CODE_COLORS.get(dayStatus.code());
-                    boolean neutral = dayStatus.code() == Code.OFF || dayStatus.code() == Code.SLEEP;
+                    // Only "В" is quiet (weekend tint, normal font); "О" has its own tint and is bold like the
+                    // shifts, so that it differs from "В" on a black-and-white printout too
+                    boolean neutral = dayStatus.code() == Code.OFF;
                     Cell cell = text(row, EMPLOYEES_FIRST_DAY_COLUMN + i, dayStatus.code().getLetter(),
                             styles.get(neutral ? weekendOr(date, colors[0]) : colors[0], colors[1],
                                     !neutral, HorizontalAlignment.CENTER, false));

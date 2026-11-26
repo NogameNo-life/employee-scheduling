@@ -33,6 +33,9 @@
   --night-border: #ede9fe;
   --night-text: #5b21b6;
   --night-dot: #7c3aed;
+  --sleep-bg: #e0f2fe;
+  --sleep-border: #7dd3fc;
+  --sleep-text: #075985;
   --off-bg: #fafaf9;
   --off-border: #e7e5e4;
   --off-text: #44403c;
@@ -266,7 +269,8 @@ body {
 
 .code-day { background: var(--day-bg); border-color: var(--day-border); color: var(--day-text); }
 .code-night { background: var(--night-bg); border-color: var(--night-border); color: var(--night-text); }
-.code-sleep { background: var(--off-bg); border-color: var(--off-border); color: var(--off-text); }
+/* "О" (sleep day after a night) must differ from "В" (day off, the quietest code) */
+.code-sleep { background: var(--sleep-bg); border-color: var(--sleep-border); color: var(--sleep-text); font-weight: 600; }
 .code-off { background: var(--c-surface); border-color: var(--c-border); color: var(--c-text-subtle); font-weight: 500; }
 .code-sick { background: var(--sick-bg); border-color: var(--sick-border); color: var(--sick-text); }
 .code-vacation { background: var(--vacation-bg); border-color: var(--vacation-border); color: var(--vacation-text); }

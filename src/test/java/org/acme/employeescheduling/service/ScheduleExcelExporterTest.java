@@ -259,6 +259,11 @@ class ScheduleExcelExporterTest {
             assertThat(row121.getCell(2).getStringCellValue()).isEqualTo("Сотрудник 12-1");
             assertThat(row121.getCell(EMPLOYEE_DAY_COLUMN).getStringCellValue()).isEqualTo("Н");
             assertThat(row121.getCell(EMPLOYEE_DAY_COLUMN + 1).getStringCellValue()).isEqualTo("О");
+            // "О" has its own tint (as .code-sleep) and is bold, "В" is normal: they differ in black and white too
+            XSSFCellStyle sleep = (XSSFCellStyle) row121.getCell(EMPLOYEE_DAY_COLUMN + 1).getCellStyle();
+            assertThat(fill(row121.getCell(EMPLOYEE_DAY_COLUMN + 1))).isEqualTo("FFE0F2FE");
+            assertThat(sleep.getFont().getXSSFColor().getARGBHex()).isEqualTo("FF075985");
+            assertThat(sleep.getFont().getBold()).isTrue();
             assertThat(row121.getCell(EMPLOYEE_DAY_COLUMN + 4).getStringCellValue()).isEqualTo("Б");
 
             Row row141 = employeeRow(employees, 141);
@@ -269,6 +274,8 @@ class ScheduleExcelExporterTest {
             assertThat(row111.getCell(EMPLOYEE_DAY_COLUMN).getStringCellValue()).isEqualTo("В");
             assertThat(row111.getCell(EMPLOYEE_DAY_COLUMN).getCellComment().getString().getString())
                     .isEqualTo("снят со смены: Д, Line 1");
+            assertThat(((XSSFCellStyle) row111.getCell(EMPLOYEE_DAY_COLUMN).getCellStyle()).getFont().getBold())
+                    .isFalse();
 
             // Totals: Д, Н, Смен, Часов (12 h per shift)
             int totals = EMPLOYEE_DAY_COLUMN + 30;
