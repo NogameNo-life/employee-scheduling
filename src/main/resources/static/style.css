@@ -223,10 +223,10 @@ body {
 }
 
 .legend-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-/* The hint takes the rest of the line (cut with "…", full text in the title); it wraps only below 240 px */
+/* The hint takes the rest of the line (cut with "…", full text in the title); it wraps only below 160 px */
 .legend-hint {
   flex: 1 1 0;
-  min-width: 240px;
+  min-width: 160px;
   margin-left: auto;
   text-align: right;
   white-space: nowrap;
@@ -491,6 +491,26 @@ body {
 }
 
 .empty-state { padding: var(--space-xl); color: var(--c-text-subtle); text-align: center; }
+
+/* ---------- Scrolling the days ---------- */
+.grid-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 4px var(--space-sm);
+  border-bottom: 1px solid var(--c-border);
+}
+.grid-nav .btn { height: 26px; padding: 0 8px; font-size: 12px; line-height: 24px; }
+.grid-nav-range { margin-left: var(--space-sm); color: var(--c-text-subtle); font-size: 12px; }
+.legend-wheel { color: var(--c-text-muted); font-size: 12px; white-space: nowrap; }
+.grid-scroll:focus { outline: none; }
+.grid-scroll:focus-visible { outline: 2px solid var(--c-tertiary); outline-offset: -2px; }
+/* Drag to pan: empty parts of the grid and the day header (cards and employee cells keep their own cursor) */
+.grid-scroll .line-cell,
+.grid-scroll thead th,
+.grid-scroll .crew-row td { cursor: grab; }
+.grid-scroll.panning,
+.grid-scroll.panning * { cursor: grabbing !important; user-select: none; }
 
 /* ---------- Drawer ---------- */
 .drawer {

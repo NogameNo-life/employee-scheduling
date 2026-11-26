@@ -124,7 +124,10 @@ $(document).ready(function () {
   $("#shiftEmployeeModalSave").click(saveShiftEmployee);
   $("#shiftEmployeeModalSelect").on("change", updateShiftEmployeeButton);
   $("#drawerClose").click(closeDrawer);
-  $(window).on("resize", fitGridHeight);
+  $(window).on("resize", () => {
+    fitGridHeight();
+    updateDayScrolling();
+  });
 
   // Grid events (the grid is drawn again after every change, so the handlers are delegated)
   const grid = $("#gridScroll");
@@ -134,7 +137,11 @@ $(document).ready(function () {
     openCrewPicker({date: card.data("date"), type: card.data("type"), lineId: String(card.data("line"))});
   });
   grid.on("click", ".line-menu-button", event => toggleLineMenu($(event.currentTarget)));
-  grid.on("scroll", closeLineMenu);
+  grid.on("scroll", () => {
+    closeLineMenu();
+    updateDayScrolling();
+  });
+  setupDayScrolling(grid[0]);
   grid.on("click", ".emp-label", event => openDrawer("employee", $(event.currentTarget).data("employee")));
   grid.on("click", ".emp-cell", event => {
     const cell = $(event.currentTarget);
@@ -343,7 +350,8 @@ function renderLegend() {
   const hint = view === "lines"
     ? "Нажмите на смену — подробности. Перетащите на смену той же линии и типа — обмен бригадами, на пустую — перенос."
     : "ФИО — карточка сотрудника, клетка — изменить смену в этот день.";
-  $("#legend").html(items.join("") + `<span class="legend-hint" title="${escapeHtml(hint)}">${escapeHtml(hint)}</span>`);
+  $("#legend").html(items.join("") + `<span class="legend-wheel"><span class="fas fa-mouse me-1"></span><span id="wheelHint"></span></span>`
+    + `<span class="legend-hint" title="${escapeHtml(hint)}">${escapeHtml(hint)}</span>`);
 }
 
 function legendItem(code, css, text, marker = "") {
@@ -380,6 +388,145 @@ function renderGrid() {
   if (drawer != null && drawer.kind === "shift") {
     container.find(`.shift-card[data-id="${cssEscape(drawer.id)}"]`).addClass("selected");
   }
+  updateDayScrolling();
+}
+
+// ----- Scrolling the days (both views) -----
+// Wheel: in "По линиям" without vertical overflow the wheel scrolls the days; otherwise the browser default
+// (vertical, Shift + wheel horizontal). Buttons: a week back / forward, today. Arrows: one day. Drag to pan on
+// the empty parts of the grid and on the day header (never on shift cards or employee cells).
+
+// The day header cells of the grid (one per day, in order)
+function dayHeads() {
+  return document.querySelectorAll("#gridScroll thead th[data-date]");
+}
+
+// Width of the sticky first column: a day is "visible" only to the right of it
+function stickyWidth() {
+  const corner = document.querySelector("#gridScroll thead .sticky-col");
+  return corner == null ? 0 : corner.offsetWidth;
+}
+
+// Index of the first day that is (mostly) visible
+function firstVisibleDay() {
+  const grid = document.getElementById("gridScroll");
+  const left = grid.scrollLeft + stickyWidth();
+  const heads = [...dayHeads()];
+  const index = heads.findIndex(head => head.offsetLeft + head.offsetWidth / 2 > left);
+  return Math.max(0, index);
+}
+
+function scrollToDay(dayIndex, smooth = true) {
+  const heads = dayHeads();
+  if (heads.length === 0) {
+    return;
+  }
+  const head = heads[Math.max(0, Math.min(heads.length - 1, dayIndex))];
+  document.getElementById("gridScroll").scrollTo({left: head.offsetLeft - stickyWidth(), behavior: smooth ? "smooth" : "auto"});
+}
+
+function scrollDays(days, smooth = true) {
+  scrollToDay(firstVisibleDay() + days, smooth);
+}
+
+function gridHasVerticalOverflow(grid) {
+  return grid.scrollHeight > grid.clientHeight + 1;
+}
+
+// Buttons, the visible days ("01–14") and the wheel hint follow the scroll position and the view
+function updateDayScrolling() {
+  const grid = document.getElementById("gridScroll");
+  const heads = [...dayHeads()];
+  const maxLeft = grid.scrollWidth - grid.clientWidth;
+  const today = JSJoda.LocalDate.now().toString();
+  $("#weekBackButton").prop("disabled", heads.length === 0 || grid.scrollLeft <= 0);
+  $("#weekForwardButton").prop("disabled", heads.length === 0 || grid.scrollLeft >= maxLeft - 1);
+  const hasToday = heads.some(head => head.dataset.date === today);
+  $("#todayButton").prop("disabled", !hasToday)
+    .attr("title", hasToday ? "Сегодня — первый видимый день" : "Сегодняшнего дня нет в показанном месяце");
+  if (heads.length > 0) {
+    const right = grid.scrollLeft + grid.clientWidth;
+    const first = firstVisibleDay();
+    let last = first;
+    heads.forEach((head, i) => {
+      if (head.offsetLeft + head.offsetWidth / 2 <= right) {
+        last = i;
+      }
+    });
+    $("#visibleDays").text(`Дни ${dayNumber(heads[first].dataset.date)}–${dayNumber(heads[last].dataset.date)}`);
+  } else {
+    $("#visibleDays").text("");
+  }
+  const wheelScrollsDays = view === "lines" && !gridHasVerticalOverflow(grid);
+  $("#wheelHint").text(wheelScrollsDays ? "Колесо мыши — листать дни" : "Shift + колесо — листать дни");
+}
+
+function setupDayScrolling(grid) {
+  grid.addEventListener("wheel", event => {
+    // Only a plain vertical wheel turn (trackpad gestures with a horizontal part stay as they are)
+    if (view !== "lines" || event.shiftKey || event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0
+      || gridHasVerticalOverflow(grid)) {
+      return;
+    }
+    const maxLeft = grid.scrollWidth - grid.clientWidth;
+    const canScroll = event.deltaY > 0 ? grid.scrollLeft < maxLeft - 1 : grid.scrollLeft > 0;
+    if (!canScroll) {
+      return; // First / last day: the page scrolls
+    }
+    event.preventDefault();
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 40
+      : (event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? grid.clientWidth : 1);
+    grid.scrollLeft += event.deltaY * unit;
+  }, {passive: false});
+
+  grid.addEventListener("keydown", event => {
+    if ((event.key !== "ArrowLeft" && event.key !== "ArrowRight") || event.altKey || event.ctrlKey || event.metaKey
+      || document.querySelector(".modal.show") != null) {
+      return;
+    }
+    event.preventDefault();
+    scrollDays(event.key === "ArrowRight" ? 1 : -1, false);
+  });
+
+  // Drag to pan (mouse events: touch scrolls by itself)
+  let pan = null;
+  grid.addEventListener("mousedown", event => {
+    if (event.button !== 0
+      || event.target.closest(".shift-card, .emp-cell, .emp-label, button, a, input, select, label") != null) {
+      return;
+    }
+    event.preventDefault(); // No text selection while panning
+    grid.focus({preventScroll: true});
+    pan = {x: event.clientX, left: grid.scrollLeft, moved: false};
+  });
+  document.addEventListener("mousemove", event => {
+    if (pan == null) {
+      return;
+    }
+    const dx = event.clientX - pan.x;
+    if (!pan.moved && Math.abs(dx) > 3) {
+      pan.moved = true;
+      grid.classList.add("panning");
+    }
+    if (pan.moved) {
+      grid.scrollLeft = pan.left - dx;
+    }
+  });
+  const endPan = () => {
+    pan = null;
+    grid.classList.remove("panning");
+  };
+  document.addEventListener("mouseup", endPan);
+  window.addEventListener("blur", endPan);
+
+  $("#weekBackButton").click(() => scrollDays(-7));
+  $("#weekForwardButton").click(() => scrollDays(7));
+  $("#todayButton").click(() => {
+    const index = [...dayHeads()].findIndex(head => head.dataset.date === JSJoda.LocalDate.now().toString());
+    if (index >= 0) {
+      scrollToDay(index);
+    }
+  });
 }
 
 // ----- "По линиям" -----
@@ -406,7 +553,7 @@ function linesGridHtml() {
       text = `${peopleWithNorm} / ${needed}`;
       title = `Людей / нужно в сменах бригад с нормой (PLR_BR.NTB). Всего людей в сменах дня: ${people}`;
     }
-    return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col"><span
+    return `<th class="day-head${weekendClass(date)}${date === today ? " today" : ""}" scope="col" data-date="${date}"><span
       class="day-number">${dayNumber(date)}</span><span class="day-week">${weekday(date)}</span><span
       class="day-people${short ? " short" : ""}" title="${title}">${text.replace(" / ", "/")}</span></th>`;
   }).join("");
@@ -529,7 +676,7 @@ function moveCrewShift(shift, slot) {
 function employeesGridHtml() {
   const today = JSJoda.LocalDate.now().toString();
   const head = index.days.map(date => `<th class="emp-day-head${weekendClass(date)}${date === today ? " today" : ""}"
-    scope="col">${dayNumber(date)}<span class="day-week">${weekday(date)}</span></th>`).join("");
+    scope="col" data-date="${date}">${dayNumber(date)}<span class="day-week">${weekday(date)}</span></th>`).join("");
   const employeesByCrew = new Map();
   lastSchedule.employees.forEach(employee => pushTo(employeesByCrew, employee.crew.id, employee));
   const rows = [...lastSchedule.crews].sort((a, b) => a.id - b.id).map(crew => {
